@@ -37,8 +37,6 @@
 
 #define MAXCLIENT		200
 
-#define max(a,b)        ((a) > (b) ? (a) : (b))
-
 #define VLAN_TAG_LEN   4
 struct vlan_tag {
 	u_int16_t vlan_tpid;	/* ETH_P_8021Q */
@@ -57,12 +55,6 @@ struct _EtherHeader {
 
 typedef struct _EtherHeader EtherPacket;
 
-struct packet_buf {
-	time_t rcvt;		// recv time, 0 if not valid
-	int len;		// buf len
-	unsigned char *buf;	// packet header is 8 bytes: UDPFRG+seq
-};
-
 struct client_info {
 	uint8_t mac[6];
 	time_t last_see;
@@ -74,26 +66,22 @@ struct client_info {
 	uint64_t recv_bytes;
 } clients[MAXCLIENT];
 
-int total_client = 0;
-
 struct router_info {
 	uint8_t mac[6];
 	uint16_t rvlan;
 	uint64_t send_pkts;
 	uint64_t send_bytes;
-	uint64_t recv_pkts;
-	uint64_t recv_bytes;
 	uint64_t bcast_pkts;
 	uint64_t bcast_bytes;
 } routers[MAXCLIENT];
 
 int total_router = 0;
+int total_client = 0;
 
 int daemon_proc;		/* set nonzero by daemon_init() */
 int debug = 0;
 
-char client_config[MAXLEN];
-char router_config[MAXLEN];
+char client_config[MAXLEN], router_config[MAXLEN];
 char dev_client[MAXLEN], dev_router[MAXLEN];
 
 int32_t ifindex_client, ifindex_router;
@@ -101,15 +89,28 @@ int fdraw_client, fdraw_router;
 
 void read_client_config(char *fname);
 void read_router_config(char *fname);
+void print_client_config();
+void print_router_config();
+void err_msg(const char *fmt, ...);
 
 void sig_handler_hup(int signo)
 {
+	err_msg("reread config file...");
 	read_client_config(client_config);
 	read_router_config(router_config);
+	print_client_config();
+	print_router_config();
 }
 
 void sig_handler_usr1(int signo)
 {
+	int i;
+	print_client_config();
+	print_router_config();
+	for (i = 0; i < total_client; i++)
+		clients[i].send_pkts = clients[i].send_bytes = clients[i].recv_pkts = clients[i].recv_bytes = 0;
+	for (i = 0; i < total_router; i++)
+		routers[i].send_pkts = routers[i].send_bytes = routers[i].bcast_pkts = routers[i].bcast_bytes = 0;
 }
 
 void err_doit(int errnoflag, int level, const char *fmt, va_list ap)
@@ -207,20 +208,13 @@ char *mac_to_str(uint8_t * mac)
 
 unsigned char hex_digit(char ch)
 {
-	if (('0' <= ch) && (ch <= '9')) {
-		ch -= '0';
-	} else {
-		if (('a' <= ch) && (ch <= 'f')) {
-			ch += 10 - 'a';
-		} else {
-			if (('A' <= ch) && (ch <= 'F')) {
-				ch += 10 - 'A';
-			} else {
-				ch = 16;
-			}
-		}
-	}
-	return ch;
+	if (('0' <= ch) && (ch <= '9'))
+		return ch - '0';
+	if (('a' <= ch) && (ch <= 'f'))
+		return ch + 10 - 'a';
+	if (('A' <= ch) && (ch <= 'F'))
+		return ch + 10 - 'A';
+	return 16;
 }
 
 void str_to_mac(char *str, uint8_t * mac)
@@ -251,7 +245,6 @@ int find_client(uint8_t * mac)
 int add_client(uint8_t * mac, uint16_t rvlan)
 {
 	int i;
-
 	i = find_client(mac);
 	if (i >= 0) {
 		Debug("%s in table\n", mac_to_str(mac));
@@ -423,10 +416,10 @@ void print_router_config()
 	err_msg("router config file: %s", router_config);
 	err_msg("router dev name: %s", dev_router);
 	err_msg("routers:");
-	err_msg("idx MAC        rvlan send_pkt send_byte recv_pkt recv_byte bcast_pkt bcast_byte");
+	err_msg("idx MAC        rvlan send_pkt send_byte bcast_pkt bcast_byte");
 	for (i = 0; i < total_router; i++)
-		printf("%02d %s %4d %ld %ld %ld %ld %ld %ld\n", i + 1, mac_to_str(routers[i].mac), routers[i].rvlan,
-		       routers[i].send_pkts, routers[i].send_bytes, routers[i].recv_pkts, routers[i].recv_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
+		printf("%02d %s %4d %ld %ld %ld %ld\n", i + 1, mac_to_str(routers[i].mac), routers[i].rvlan,
+		       routers[i].send_pkts, routers[i].send_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
 }
 
 /**
@@ -810,9 +803,9 @@ void process_router_to_client(void)
 			sendto(fdraw_client, buf + offset, len, 0, (struct sockaddr *)&sll, sizeof(sll));
 			continue;
 		}
+		// broadcast packet, flood to every vlan
 		routers[i].bcast_pkts++;
 		routers[i].bcast_bytes += len;
-		// brocastpacket, flood to every vlan
 		uint8_t vlan_send[4096];
 		memset(vlan_send, 0, 4096);
 		for (i = 0; i < total_client; i++) {
@@ -851,8 +844,8 @@ void usage(void)
 	printf("    -d                enable debug\n");
 	printf("    -c client_config\n");
 	printf("    -r router_config\n");
-	printf(" HUP  signal: print statistics\n");
-	printf(" USR1 signal: reset statistics\n");
+	printf(" HUP  signal: reread config file\n");
+	printf(" USR1 signal: print information & reset statistics\n");
 	exit(0);
 }
 
