@@ -632,7 +632,7 @@ void process_client_to_router(void)
 		Debug("client index %d, tpid: %04X, vlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
 
 		if (tag->vlan_tpid != 0x0081) {	// vlan 
-			Debug("ignore tpid %04X packet", tag->vlan_tpid);
+			Debug("ignore tpid %04X packet\n", tag->vlan_tpid);
 			continue;
 		}
 
@@ -640,7 +640,7 @@ void process_client_to_router(void)
 		clients[i].vlan = ntohs(tag->vlan_tci) & 0xfff;
 		clients[i].send_pkts++;
 		clients[i].send_bytes += len;
-		Debug("vlan: %d", clients[i].vlan);
+		// Debug("vlan: %d", clients[i].vlan);
 
 		// change to router vlan
 		tag->vlan_tci = htons(clients[i].rvlan & 0xfff);
@@ -648,6 +648,7 @@ void process_client_to_router(void)
 			printPacket((EtherPacket *) (buf + offset), len, "sendto router:");
 			if (offset)
 				printf("offset=%d\n", offset);
+			printf("\n");
 		}
 
 		struct sockaddr_ll sll;
@@ -761,12 +762,12 @@ void process_router_to_client(void)
 		Debug("router index %d, tpid: %04X, vlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
 
 		if (tag->vlan_tpid != 0x0081) {	// vlan 
-			Debug("ignore tpid %04X packet", tag->vlan_tpid);
+			Debug("ignore tpid %04X packet\n", tag->vlan_tpid);
 			continue;
 		}
 
 		if ((ntohs(tag->vlan_tci) & 0xfff) != routers[i].rvlan) {
-			Debug("vlan %d is not the configed vlan %d, ignore", ntohs(tag->vlan_tci) & 0xfff, routers[i].rvlan);
+			Debug("vlan %d is not the configed vlan %d, ignore\n", ntohs(tag->vlan_tci) & 0xfff, routers[i].rvlan);
 			continue;
 		}
 
@@ -782,7 +783,7 @@ void process_router_to_client(void)
 			Debug("client index %d, vlan: %d", i, clients[i].vlan);
 
 			if (rvlan != clients[i].rvlan) {
-				Debug("routervlan %d is not the same as client rvlan %d", rvlan, clients[i].rvlan);
+				Debug("routervlan %d is not the same as client rvlan %d, ignore\n", rvlan, clients[i].rvlan);
 				continue;
 			}
 			// change to client vlan
@@ -791,6 +792,7 @@ void process_router_to_client(void)
 				printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
 				if (offset)
 					printf("offset=%d\n", offset);
+				printf("\n");
 			}
 			clients[i].recv_pkts++;
 			clients[i].recv_bytes += len;
@@ -823,6 +825,7 @@ void process_router_to_client(void)
 				printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
 				if (offset)
 					printf("offset=%d\n", offset);
+				printf("\n");
 			}
 
 			struct sockaddr_ll sll;
