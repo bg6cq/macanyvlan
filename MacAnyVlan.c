@@ -55,7 +55,7 @@ struct _EtherHeader {
 
 typedef struct _EtherHeader EtherPacket;
 
-struct client_info {
+volatile struct client_info {
 	uint8_t mac[6];
 	time_t last_see;
 	uint16_t vlan;
@@ -66,7 +66,7 @@ struct client_info {
 	uint64_t recv_bytes;
 } clients[MAXCLIENT];
 
-struct router_info {
+volatile struct router_info {
 	uint8_t mac[6];
 	uint16_t rvlan;
 	uint64_t send_pkts;
@@ -75,8 +75,8 @@ struct router_info {
 	uint64_t bcast_bytes;
 } routers[MAXCLIENT];
 
-int total_router = 0;
-int total_client = 0;
+volatile int total_router = 0;
+volatile int total_client = 0;
 
 int daemon_proc;		/* set nonzero by daemon_init() */
 int debug = 0;
@@ -237,7 +237,7 @@ int find_client(uint8_t * mac)
 {
 	int i;
 	for (i = 0; i < total_client; i++)
-		if (memcmp(clients[i].mac, mac, 6) == 0)
+		if (memcmp((void *)clients[i].mac, mac, 6) == 0)
 			return i;
 	return -1;
 }
@@ -255,7 +255,7 @@ int add_client(uint8_t * mac, uint16_t rvlan)
 		Debug("Too many client\n");
 		return -1;
 	}
-	memcpy(clients[total_client].mac, mac, 6);
+	memcpy((void *)clients[total_client].mac, mac, 6);
 	clients[total_client].last_see = 0;
 	clients[total_client].rvlan = rvlan;
 	clients[total_client].vlan = 0;
@@ -324,15 +324,15 @@ void print_client_config()
 	err_msg("clients:");
 	err_msg("idx MAC        rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
-		printf("%02d %s %4d %4d %ld %ld %ld %ld %ld\n", i + 1, mac_to_str(clients[i].mac), clients[i].rvlan, clients[i].vlan, (long)clients[i].last_see,
-		       clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
+		printf("%02d %s %4d %4d %ld %ld %ld %ld %ld\n", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlan,
+		       (long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
 }
 
 int find_router(uint8_t * mac)
 {
 	int i;
 	for (i = 0; i < total_router; i++)
-		if (memcmp(routers[i].mac, mac, 6) == 0)
+		if (memcmp((void *)routers[i].mac, mac, 6) == 0)
 			return i;
 	return -1;
 }
@@ -350,7 +350,7 @@ int add_router(uint8_t * mac, uint16_t rvlan)
 		Debug("Too many router\n");
 		return -1;
 	}
-	memcpy(routers[total_router].mac, mac, 6);
+	memcpy((void *)routers[total_router].mac, mac, 6);
 	routers[total_router].rvlan = rvlan;
 	total_router++;
 	return 0;
@@ -417,7 +417,7 @@ void print_router_config()
 	err_msg("routers:");
 	err_msg("idx MAC        rvlan send_pkt send_byte bcast_pkt bcast_byte");
 	for (i = 0; i < total_router; i++)
-		printf("%02d %s %4d %ld %ld %ld %ld\n", i + 1, mac_to_str(routers[i].mac), routers[i].rvlan,
+		printf("%02d %s %4d %ld %ld %ld %ld\n", i + 1, mac_to_str((uint8_t *) routers[i].mac), routers[i].rvlan,
 		       routers[i].send_pkts, routers[i].send_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
 }
 
