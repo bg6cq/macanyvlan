@@ -325,10 +325,11 @@ void read_client_config(char *fname)
 void print_client_config()
 {
 	int i;
+	err_msg("======================");
 	err_msg("client config file: %s", client_config);
 	err_msg("client dev name: %s", dev_client);
 	err_msg("clients:");
-	err_msg("idx MAC rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
+	err_msg("idx MAC        rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
 		printf("%02d %s %4d %4d %ld %ld %ld %ld %ld\n", i + 1, mac_to_str(clients[i].mac), clients[i].rvlan, clients[i].vlan, (long)clients[i].last_see,
 		       clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
@@ -418,10 +419,11 @@ void read_router_config(char *fname)
 void print_router_config()
 {
 	int i;
-	err_msg("router config file: %s\n", router_config);
-	err_msg("router dev name: %s\n", dev_router);
-	err_msg("routers:\n");
-	err_msg("idx MAC rvlan send_pkt send_byte recv_pkt recv_byte bcast_pkt bcast_byte");
+	err_msg("======================");
+	err_msg("router config file: %s", router_config);
+	err_msg("router dev name: %s", dev_router);
+	err_msg("routers:");
+	err_msg("idx MAC        rvlan send_pkt send_byte recv_pkt recv_byte bcast_pkt bcast_byte");
 	for (i = 0; i < total_router; i++)
 		printf("%02d %s %4d %ld %ld %ld %ld %ld %ld\n", i + 1, mac_to_str(routers[i].mac), routers[i].rvlan,
 		       routers[i].send_pkts, routers[i].send_bytes, routers[i].recv_pkts, routers[i].recv_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
@@ -786,8 +788,8 @@ void process_router_to_client(void)
 
 			Debug("client index %d, vlan: %d", i, clients[i].vlan);
 
-			if (rvlan != clients[i].vlan) {
-				Debug("routervlan %d is not the same as client vlan %d", rvlan, clients[i].vlan);
+			if (rvlan != clients[i].rvlan) {
+				Debug("routervlan %d is not the same as client rvlan %d", rvlan, clients[i].rvlan);
 				continue;
 			}
 			// change to client vlan
