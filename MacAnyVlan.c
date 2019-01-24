@@ -806,7 +806,7 @@ void process_router_to_client(void)
 		for (i = 0; i < total_client; i++) {
 			if (vlan_send[clients[i].vlan])
 				continue;
-			if (rvlan != clients[i].vlan)
+			if (rvlan != clients[i].rvlan)
 				continue;
 			vlan_send[clients[i].vlan] = 1;
 
