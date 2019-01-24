@@ -301,7 +301,7 @@ void read_client_config(char *fname)
 		}
 		if (strlen(buf) < 13)
 			continue;
-		Debug("read client :%s:\n", buf);
+		// Debug("read client :%s:\n", buf);
 		buf[12] = 0;
 		p = buf + 13;
 		int rvlan = atoi(p);
@@ -387,13 +387,12 @@ void read_router_config(char *fname)
 				p++;
 			strcpy(dev_router, p);
 			p = dev_router;
-			Debug(":%s:\n", p);
 			while (*p && (((*p >= 'a') && (*p <= 'z')) || ((*p >= '0') && (*p <= '9'))))
 				p++;
 			*p = 0;
 			continue;
 		}
-		Debug("read router :%s:\n", buf);
+		// Debug("read router :%s:\n", buf);
 		if (strlen(buf) < 13)
 			continue;
 		buf[12] = 0;
@@ -580,14 +579,12 @@ void process_client_to_router(void)
 #endif
 				continue;
 
-			if (debug)
-				Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
+			//      Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
 
 			len = len > iov.iov_len ? iov.iov_len : len;
 			if (len < 12)	// MAC_len * 2
 				break;
-			if (debug)
-				Debug("len=%d", len);
+			// Debug("len=%d", len);
 
 			memmove(buf, buf + VLAN_TAG_LEN, 12);
 			offset = 0;
@@ -596,8 +593,7 @@ void process_client_to_router(void)
 			 * Now insert the tag.
 			 */
 			tag = (struct vlan_tag *)(buf + 12);
-			if (debug)
-				Debug("insert vlan id, recv len=%d", len);
+			// Debug("insert vlan id, recv len=%d", len);
 
 #ifdef TP_STATUS_VLAN_TPID_VALID
 			tag->vlan_tpid = ((aux->tp_vlan_tpid || (aux->tp_status & TP_STATUS_VLAN_TPID_VALID)) ? aux->tp_vlan_tpid : 0x0081);
@@ -710,14 +706,12 @@ void process_router_to_client(void)
 #endif
 				continue;
 
-			if (debug)
-				Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
+			// Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
 
 			len = len > iov.iov_len ? iov.iov_len : len;
 			if (len < 12)	// MAC_len * 2
 				break;
-			if (debug)
-				Debug("len=%d", len);
+			// Debug("len=%d", len);
 
 			memmove(buf, buf + VLAN_TAG_LEN, 12);
 			offset = 0;
@@ -726,8 +720,7 @@ void process_router_to_client(void)
 			 * Now insert the tag.
 			 */
 			tag = (struct vlan_tag *)(buf + 12);
-			if (debug)
-				Debug("insert vlan id, recv len=%d", len);
+			// Debug("insert vlan id, recv len=%d", len);
 
 #ifdef TP_STATUS_VLAN_TPID_VALID
 			tag->vlan_tpid = ((aux->tp_vlan_tpid || (aux->tp_status & TP_STATUS_VLAN_TPID_VALID)) ? aux->tp_vlan_tpid : 0x0081);
