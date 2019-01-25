@@ -320,11 +320,11 @@ void print_client_config()
 	int i;
 	err_msg("======================");
 	err_msg("client config file: %s", client_config);
-	err_msg("client dev name: %s", dev_client);
+	err_msg("client network dev: %s", dev_client);
 	err_msg("clients:");
-	err_msg("idx MAC        rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
+	err_msg("idx MAC         rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
-		err_msg("%02d %s %4d %4d %ld %ld %ld %ld %ld\n", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlan,
+		err_msg("%3d %s %4d %4d %ld %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlan,
 			(long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
 }
 
@@ -412,11 +412,11 @@ void print_router_config()
 	int i;
 	err_msg("======================");
 	err_msg("router config file: %s", router_config);
-	err_msg("router dev name: %s", dev_router);
+	err_msg("router network dev: %s", dev_router);
 	err_msg("routers:");
-	err_msg("idx MAC        rvlan send_pkt send_byte bcast_pkt bcast_byte");
+	err_msg("idx MAC         rvlan send_pkt send_byte bcast_pkt bcast_byte");
 	for (i = 0; i < total_router; i++)
-		err_msg("%02d %s %4d %ld %ld %ld %ld\n", i + 1, mac_to_str((uint8_t *) routers[i].mac), routers[i].rvlan,
+		err_msg("%3d %s %4d %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) routers[i].mac), routers[i].rvlan,
 			routers[i].send_pkts, routers[i].send_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
 }
 
