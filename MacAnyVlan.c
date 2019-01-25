@@ -325,14 +325,14 @@ void print_client_config()
 	err_msg("idx MAC        rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
 		err_msg("%02d %s %4d %4d %ld %ld %ld %ld %ld\n", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlan,
-		       (long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
+			(long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
 }
 
-int find_router(uint8_t * mac)
+int find_router(uint8_t * mac, uint16_t rvlan)
 {
 	int i;
 	for (i = 0; i < total_router; i++)
-		if (memcmp((void *)routers[i].mac, mac, 6) == 0)
+		if ((memcmp((void *)routers[i].mac, mac, 6) == 0) && (routers[i].rvlan == rvlan))
 			return i;
 	return -1;
 }
@@ -340,10 +340,9 @@ int find_router(uint8_t * mac)
 int add_router(uint8_t * mac, uint16_t rvlan)
 {
 	int i;
-	i = find_router(mac);
+	i = find_router(mac, rvlan);
 	if (i >= 0) {
 		Debug("%s in table\n", mac_to_str(mac));
-		routers[i].rvlan = rvlan;
 		return -1;
 	}
 	if (total_router == MAXCLIENT - 1) {
@@ -418,7 +417,7 @@ void print_router_config()
 	err_msg("idx MAC        rvlan send_pkt send_byte bcast_pkt bcast_byte");
 	for (i = 0; i < total_router; i++)
 		err_msg("%02d %s %4d %ld %ld %ld %ld\n", i + 1, mac_to_str((uint8_t *) routers[i].mac), routers[i].rvlan,
-		       routers[i].send_pkts, routers[i].send_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
+			routers[i].send_pkts, routers[i].send_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
 }
 
 /**
@@ -745,24 +744,18 @@ void process_router_to_client(void)
 			if (offset)
 				printf("offset=%d\n", offset);
 		}
-		int i = find_router(buf + offset + 6);
-		if (i < 0) {
-			Debug("unknow router, ignore\n");
-			continue;
-		}
-		int rvlan = routers[i].rvlan;
 		tag = (struct vlan_tag *)(buf + offset + 12);
-		Debug("router index %d, tpid: %04X, vlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
-
 		if (tag->vlan_tpid != 0x0081) {	// vlan 
 			Debug("ignore tpid %04X packet\n", tag->vlan_tpid);
 			continue;
 		}
-
-		if ((ntohs(tag->vlan_tci) & 0xfff) != routers[i].rvlan) {
-			Debug("vlan %d is not the configed vlan %d, ignore\n", ntohs(tag->vlan_tci) & 0xfff, routers[i].rvlan);
+		int rvlan = ntohs(tag->vlan_tci) & 0xfff;
+		int i = find_router(buf + offset + 6, rvlan);
+		if (i < 0) {
+			Debug("unknow router, ignore\n");
 			continue;
 		}
+		Debug("router index %d, tpid: %04X, vlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
 
 		if (memcmp(buf + offset, "\xff\xff\xff\xff\xff\xff", 6) != 0) {	// not a broadcast packet
 			routers[i].send_pkts++;
