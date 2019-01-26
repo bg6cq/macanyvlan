@@ -37,8 +37,6 @@
 
 #define MAXCLIENT		200
 
-#define max(a,b)        ((a) > (b) ? (a) : (b))
-
 #define VLAN_TAG_LEN   4
 struct vlan_tag {
 	u_int16_t vlan_tpid;	/* ETH_P_8021Q */
@@ -57,45 +55,62 @@ struct _EtherHeader {
 
 typedef struct _EtherHeader EtherPacket;
 
-struct packet_buf {
-	time_t rcvt;		// recv time, 0 if not valid
-	int len;		// buf len
-	unsigned char *buf;	// packet header is 8 bytes: UDPFRG+seq
-};
-
-struct client_info {
+volatile struct client_info {
 	uint8_t mac[6];
 	time_t last_see;
 	uint16_t vlan;
+	uint16_t rvlan;
+	uint64_t send_pkts;
+	uint64_t send_bytes;
+	uint64_t recv_pkts;
+	uint64_t recv_bytes;
 } clients[MAXCLIENT];
 
-int total_client = 0;
-
-struct router_info {
+volatile struct router_info {
 	uint8_t mac[6];
+	uint16_t rvlan;
+	uint64_t send_pkts;
+	uint64_t send_bytes;
+	uint64_t bcast_pkts;
+	uint64_t bcast_bytes;
 } routers[MAXCLIENT];
 
-int total_router = 0;
-int router_vlan;
+volatile int total_router = 0;
+volatile int total_client = 0;
 
 int daemon_proc;		/* set nonzero by daemon_init() */
 int debug = 0;
 
-char client_config[MAXLEN];
+char client_config[MAXLEN], router_config[MAXLEN];
 char dev_client[MAXLEN], dev_router[MAXLEN];
 
 int32_t ifindex_client, ifindex_router;
 int fdraw_client, fdraw_router;
 
-volatile int got_signal = 1;
+void read_client_config(char *fname);
+void read_router_config(char *fname);
+void print_client_config();
+void print_router_config();
+void err_msg(const char *fmt, ...);
 
 void sig_handler_hup(int signo)
 {
-	got_signal = 1;
+	err_msg("reread config file...");
+	read_client_config(client_config);
+	read_router_config(router_config);
+	print_client_config();
+	print_router_config();
 }
 
 void sig_handler_usr1(int signo)
 {
+	int i;
+	print_client_config();
+	print_router_config();
+	for (i = 0; i < total_client; i++)
+		clients[i].send_pkts = clients[i].send_bytes = clients[i].recv_pkts = clients[i].recv_bytes = 0;
+	for (i = 0; i < total_router; i++)
+		routers[i].send_pkts = routers[i].send_bytes = routers[i].bcast_pkts = routers[i].bcast_bytes = 0;
 }
 
 void err_doit(int errnoflag, int level, const char *fmt, va_list ap)
@@ -193,20 +208,13 @@ char *mac_to_str(uint8_t * mac)
 
 unsigned char hex_digit(char ch)
 {
-	if (('0' <= ch) && (ch <= '9')) {
-		ch -= '0';
-	} else {
-		if (('a' <= ch) && (ch <= 'f')) {
-			ch += 10 - 'a';
-		} else {
-			if (('A' <= ch) && (ch <= 'F')) {
-				ch += 10 - 'A';
-			} else {
-				ch = 16;
-			}
-		}
-	}
-	return ch;
+	if (('0' <= ch) && (ch <= '9'))
+		return ch - '0';
+	if (('a' <= ch) && (ch <= 'f'))
+		return ch + 10 - 'a';
+	if (('A' <= ch) && (ch <= 'F'))
+		return ch + 10 - 'A';
+	return 16;
 }
 
 void str_to_mac(char *str, uint8_t * mac)
@@ -229,27 +237,39 @@ int find_client(uint8_t * mac)
 {
 	int i;
 	for (i = 0; i < total_client; i++)
-		if (memcmp(clients[i].mac, mac, 6) == 0)
+		if (memcmp((void *)clients[i].mac, mac, 6) == 0)
 			return i;
 	return -1;
 }
 
-int add_client(uint8_t * mac)
+int add_client(uint8_t * mac, uint16_t rvlan)
 {
-	if (find_client(mac) >= 0) {
+	int i;
+	i = find_client(mac);
+	if (i >= 0) {
 		Debug("%s in table\n", mac_to_str(mac));
+		clients[i].rvlan = rvlan;
 		return -1;
 	}
 	if (total_client == MAXCLIENT - 1) {
 		Debug("Too many client\n");
 		return -1;
 	}
-	memcpy(clients[total_client].mac, mac, 6);
+	memcpy((void *)clients[total_client].mac, mac, 6);
 	clients[total_client].last_see = 0;
+	clients[total_client].rvlan = rvlan;
 	clients[total_client].vlan = 0;
 	total_client++;
 	return 0;
 }
+
+/* client_config file
+
+client_dev eth?
+MAC routervlan
+MAC routervlan
+
+*/
 
 void read_client_config(char *fname)
 {
@@ -264,7 +284,7 @@ void read_client_config(char *fname)
 		char *p;
 		uint8_t mac[6];
 		p = buf;
-		if (strlen(buf) < 4)
+		if (buf[0] == '#')
 			continue;
 		if (buf[strlen(buf) - 1] == '\n')
 			buf[strlen(buf) - 1] = 0;
@@ -279,12 +299,18 @@ void read_client_config(char *fname)
 			*p = 0;
 			continue;
 		}
-		while (!isblank(*p))
-			p++;
-		*p = 0;
-		Debug("read client :%s:\n", buf);
+		if (strlen(buf) < 13)
+			continue;
+		// Debug("read client :%s:\n", buf);
+		buf[12] = 0;
+		p = buf + 13;
+		int rvlan = atoi(p);
+		if ((rvlan <= 0) || (rvlan >= 4095)) {
+			err_msg("client MAC %s routervlan %d invalid", buf, rvlan);
+			continue;
+		}
 		str_to_mac(buf, mac);
-		add_client(mac);
+		add_client(mac, rvlan);
 	}
 	fclose(fp);
 }
@@ -292,25 +318,30 @@ void read_client_config(char *fname)
 void print_client_config()
 {
 	int i;
-	printf("client config file: %s\n", client_config);
-	printf("client dev name: %s\n", dev_client);
-	printf("clients:\n");
+	err_msg("======================");
+	err_msg("client config file: %s", client_config);
+	err_msg("client network dev: %s", dev_client);
+	err_msg("clients:");
+	err_msg("idx MAC         rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
-		printf("%02d %s %04d %ld\n", i + 1, mac_to_str(clients[i].mac), clients[i].vlan, (long)clients[i].last_see);
+		err_msg("%3d %s %4d %4d %ld %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlan,
+			(long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
 }
 
-int find_router(uint8_t * mac)
+int find_router(uint8_t * mac, uint16_t rvlan)
 {
 	int i;
 	for (i = 0; i < total_router; i++)
-		if (memcmp(routers[i].mac, mac, 6) == 0)
+		if ((memcmp((void *)routers[i].mac, mac, 6) == 0) && (routers[i].rvlan == rvlan))
 			return i;
 	return -1;
 }
 
-int add_router(uint8_t * mac)
+int add_router(uint8_t * mac, uint16_t rvlan)
 {
-	if (find_router(mac) >= 0) {
+	int i;
+	i = find_router(mac, rvlan);
+	if (i >= 0) {
 		Debug("%s in table\n", mac_to_str(mac));
 		return -1;
 	}
@@ -318,10 +349,19 @@ int add_router(uint8_t * mac)
 		Debug("Too many router\n");
 		return -1;
 	}
-	memcpy(routers[total_router].mac, mac, 6);
+	memcpy((void *)routers[total_router].mac, mac, 6);
+	routers[total_router].rvlan = rvlan;
 	total_router++;
 	return 0;
 }
+
+/* router config file
+
+router_dev eth?
+MAC routervlan
+MAC routervlan
+
+*/
 
 void read_router_config(char *fname)
 {
@@ -336,7 +376,7 @@ void read_router_config(char *fname)
 		char *p;
 		uint8_t mac[6];
 		p = buf;
-		if (strlen(buf) < 4)
+		if (buf[0] == '#')
 			continue;
 		if (buf[strlen(buf) - 1] == '\n')
 			buf[strlen(buf) - 1] = 0;
@@ -346,25 +386,23 @@ void read_router_config(char *fname)
 				p++;
 			strcpy(dev_router, p);
 			p = dev_router;
-			Debug(":%s:\n", p);
 			while (*p && (((*p >= 'a') && (*p <= 'z')) || ((*p >= '0') && (*p <= '9'))))
 				p++;
-			Debug(":%s:\n", p);
-			if (*p == 0)
-				continue;
 			*p = 0;
-			p++;
-			Debug(":%s:\n", p);
-			router_vlan = atoi(p);
-			Debug("vlan %d\n", router_vlan);
 			continue;
 		}
-		while (!isblank(*p))
-			p++;
-		*p = 0;
-		Debug("read router :%s:\n", buf);
+		// Debug("read router :%s:\n", buf);
+		if (strlen(buf) < 13)
+			continue;
+		buf[12] = 0;
+		p = buf + 13;
+		int rvlan = atoi(p);
+		if ((rvlan <= 0) || (rvlan >= 4095)) {
+			err_msg("router MAC %s routervlan %d invalid", buf, rvlan);
+			continue;
+		}
 		str_to_mac(buf, mac);
-		add_router(mac);
+		add_router(mac, rvlan);
 	}
 	fclose(fp);
 }
@@ -372,10 +410,14 @@ void read_router_config(char *fname)
 void print_router_config()
 {
 	int i;
-	printf("router dev name: %s,  vlan: %d\n", dev_router, router_vlan);
-	printf("routers:\n");
+	err_msg("======================");
+	err_msg("router config file: %s", router_config);
+	err_msg("router network dev: %s", dev_router);
+	err_msg("routers:");
+	err_msg("idx MAC         rvlan send_pkt send_byte bcast_pkt bcast_byte");
 	for (i = 0; i < total_router; i++)
-		printf("%02d %s\n", i + 1, mac_to_str(routers[i].mac));
+		err_msg("%3d %s %4d %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) routers[i].mac), routers[i].rvlan,
+			routers[i].send_pkts, routers[i].send_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
 }
 
 /**
@@ -536,14 +578,12 @@ void process_client_to_router(void)
 #endif
 				continue;
 
-			if (debug)
-				Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
+			//      Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
 
 			len = len > iov.iov_len ? iov.iov_len : len;
 			if (len < 12)	// MAC_len * 2
 				break;
-			if (debug)
-				Debug("len=%d", len);
+			// Debug("len=%d", len);
 
 			memmove(buf, buf + VLAN_TAG_LEN, 12);
 			offset = 0;
@@ -552,8 +592,7 @@ void process_client_to_router(void)
 			 * Now insert the tag.
 			 */
 			tag = (struct vlan_tag *)(buf + 12);
-			if (debug)
-				Debug("insert vlan id, recv len=%d", len);
+			// Debug("insert vlan id, recv len=%d", len);
 
 #ifdef TP_STATUS_VLAN_TPID_VALID
 			tag->vlan_tpid = ((aux->tp_vlan_tpid || (aux->tp_status & TP_STATUS_VLAN_TPID_VALID)) ? aux->tp_vlan_tpid : 0x0081);
@@ -588,20 +627,23 @@ void process_client_to_router(void)
 		Debug("client index %d, tpid: %04X, vlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
 
 		if (tag->vlan_tpid != 0x0081) {	// vlan 
-			Debug("ignore tpid %04X packet", tag->vlan_tpid);
+			Debug("ignore tpid %04X packet\n", tag->vlan_tpid);
 			continue;
 		}
 
 		clients[i].last_see = time(NULL);
 		clients[i].vlan = ntohs(tag->vlan_tci) & 0xfff;
-		Debug("vlan: %d", clients[i].vlan);
+		clients[i].send_pkts++;
+		clients[i].send_bytes += len;
+		// Debug("vlan: %d", clients[i].vlan);
 
 		// change to router vlan
-		tag->vlan_tci = htons(router_vlan & 0xfff);
+		tag->vlan_tci = htons(clients[i].rvlan & 0xfff);
 		if (debug) {
 			printPacket((EtherPacket *) (buf + offset), len, "sendto router:");
 			if (offset)
 				printf("offset=%d\n", offset);
+			printf("\n");
 		}
 
 		struct sockaddr_ll sll;
@@ -663,14 +705,12 @@ void process_router_to_client(void)
 #endif
 				continue;
 
-			if (debug)
-				Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
+			// Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
 
 			len = len > iov.iov_len ? iov.iov_len : len;
 			if (len < 12)	// MAC_len * 2
 				break;
-			if (debug)
-				Debug("len=%d", len);
+			// Debug("len=%d", len);
 
 			memmove(buf, buf + VLAN_TAG_LEN, 12);
 			offset = 0;
@@ -679,8 +719,7 @@ void process_router_to_client(void)
 			 * Now insert the tag.
 			 */
 			tag = (struct vlan_tag *)(buf + 12);
-			if (debug)
-				Debug("insert vlan id, recv len=%d", len);
+			// Debug("insert vlan id, recv len=%d", len);
 
 #ifdef TP_STATUS_VLAN_TPID_VALID
 			tag->vlan_tpid = ((aux->tp_vlan_tpid || (aux->tp_status & TP_STATUS_VLAN_TPID_VALID)) ? aux->tp_vlan_tpid : 0x0081);
@@ -705,25 +744,22 @@ void process_router_to_client(void)
 			if (offset)
 				printf("offset=%d\n", offset);
 		}
-		int i = find_router(buf + offset + 6);
+		tag = (struct vlan_tag *)(buf + offset + 12);
+		if (tag->vlan_tpid != 0x0081) {	// vlan 
+			Debug("ignore tpid %04X packet\n", tag->vlan_tpid);
+			continue;
+		}
+		int rvlan = ntohs(tag->vlan_tci) & 0xfff;
+		int i = find_router(buf + offset + 6, rvlan);
 		if (i < 0) {
 			Debug("unknow router, ignore\n");
 			continue;
 		}
-		tag = (struct vlan_tag *)(buf + offset + 12);
 		Debug("router index %d, tpid: %04X, vlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
 
-		if (tag->vlan_tpid != 0x0081) {	// vlan 
-			Debug("ignore tpid %04X packet", tag->vlan_tpid);
-			continue;
-		}
-
-		if ((ntohs(tag->vlan_tci) & 0xfff) != router_vlan) {
-			Debug("vlan %d is not the configed vlan %d, ignore", ntohs(tag->vlan_tci) & 0xfff, router_vlan);
-			continue;
-		}
-
 		if (memcmp(buf + offset, "\xff\xff\xff\xff\xff\xff", 6) != 0) {	// not a broadcast packet
+			routers[i].send_pkts++;
+			routers[i].send_bytes += len;
 			i = find_client(buf + offset);
 			if (i < 0) {
 				Debug("unknow unicast packet, ignore");
@@ -732,13 +768,20 @@ void process_router_to_client(void)
 
 			Debug("client index %d, vlan: %d", i, clients[i].vlan);
 
+			if (rvlan != clients[i].rvlan) {
+				Debug("routervlan %d is not the same as client rvlan %d, ignore\n", rvlan, clients[i].rvlan);
+				continue;
+			}
 			// change to client vlan
 			tag->vlan_tci = htons(clients[i].vlan & 0xfff);
 			if (debug) {
 				printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
 				if (offset)
 					printf("offset=%d\n", offset);
+				printf("\n");
 			}
+			clients[i].recv_pkts++;
+			clients[i].recv_bytes += len;
 
 			struct sockaddr_ll sll;
 			memset(&sll, 0, sizeof(sll));
@@ -748,11 +791,15 @@ void process_router_to_client(void)
 			sendto(fdraw_client, buf + offset, len, 0, (struct sockaddr *)&sll, sizeof(sll));
 			continue;
 		}
-		// brocastpacket, flood to every vlan
+		// broadcast packet, flood to every vlan
+		routers[i].bcast_pkts++;
+		routers[i].bcast_bytes += len;
 		uint8_t vlan_send[4096];
 		memset(vlan_send, 0, 4096);
 		for (i = 0; i < total_client; i++) {
 			if (vlan_send[clients[i].vlan])
+				continue;
+			if (rvlan != clients[i].rvlan)
 				continue;
 			vlan_send[clients[i].vlan] = 1;
 
@@ -764,6 +811,7 @@ void process_router_to_client(void)
 				printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
 				if (offset)
 					printf("offset=%d\n", offset);
+				printf("\n");
 			}
 
 			struct sockaddr_ll sll;
@@ -785,8 +833,8 @@ void usage(void)
 	printf("    -d                enable debug\n");
 	printf("    -c client_config\n");
 	printf("    -r router_config\n");
-	printf(" HUP  signal: print statistics\n");
-	printf(" USR1 signal: reset statistics\n");
+	printf(" HUP  signal: reread config file\n");
+	printf(" USR1 signal: print information & reset statistics\n");
 	exit(0);
 }
 
@@ -811,6 +859,7 @@ int main(int argc, char *argv[])
 			i++;
 			if (argc - i <= 0)
 				usage();
+			strncpy(router_config, argv[i], MAXLEN);
 			read_router_config(argv[i]);
 		} else
 			got_one = 0;
