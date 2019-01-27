@@ -658,10 +658,10 @@ void process_client_to_router(void)
 		}
 
 		tag = (struct vlan_tag *)(buf + offset + 12);
-		Debug("client index %d, tpid: %04X, vlan: %d, rvlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff, clients[i].rvlan);
+		Debug("client index %d, tpid: %04X, vlan: %d, rvlan: %d", i, ntohs(tag->vlan_tpid), ntohs(tag->vlan_tci) & 0xfff, clients[i].rvlan);
 
 		if (tag->vlan_tpid != 0x0081) {	// vlan 
-			Debug("ignore tpid %04X packet\n", tag->vlan_tpid);
+			Debug("ignore tpid %04X packet\n", ntohs(tag->vlan_tpid));
 			continue;
 		}
 
@@ -780,7 +780,7 @@ void process_router_to_client(void)
 		}
 		tag = (struct vlan_tag *)(buf + offset + 12);
 		if (tag->vlan_tpid != 0x0081) {	// vlan 
-			Debug("ignore tpid %04X packet\n", tag->vlan_tpid);
+			Debug("ignore tpid %04X packet\n", ntohs(tag->vlan_tpid));
 			continue;
 		}
 		int rvlan = ntohs(tag->vlan_tci) & 0xfff;
@@ -789,7 +789,7 @@ void process_router_to_client(void)
 			Debug("unknow router, ignore\n");
 			continue;
 		}
-		Debug("router index %d, tpid: %04X, rvlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
+		Debug("router index %d, tpid: %04X, rvlan: %d", i, ntohs(tag->vlan_tpid), ntohs(tag->vlan_tci) & 0xfff);
 
 		if (!(forward_multicast && (buf[offset] & 1)) && (memcmp(buf + offset, "\xff\xff\xff\xff\xff\xff", 6) != 0)) {	// not a broadcast packet
 			routers[i].send_pkts++;
