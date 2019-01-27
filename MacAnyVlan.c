@@ -35,9 +35,9 @@
 #define MAX_PACKET_SIZE		2048
 #define MAXFD   		64
 
-#define MAXCLIENT		200
+#define MAXCLIENT		4096
 
-#define HASHBKT			(MAXCLIENT *2)
+#define HASHBKT			(MAXCLIENT*2)
 
 #define VLAN_TAG_LEN   4
 struct vlan_tag {
@@ -186,22 +186,14 @@ void daemon_init(const char *pname, int facility)
 	pid_t pid;
 	if ((pid = fork()) != 0)
 		exit(0);	/* parent terminates */
-
-	/* 41st child continues */
 	setsid();		/* become session leader */
-
 	signal(SIGHUP, SIG_IGN);
 	if ((pid = fork()) != 0)
 		exit(0);	/* 1st child terminates */
-
-	/* 42nd child continues */
 	daemon_proc = 1;	/* for our err_XXX() functions */
-
 	umask(0);		/* clear our file mode creation mask */
-
 	for (i = 0; i < MAXFD; i++)
 		close(i);
-
 	openlog(pname, LOG_PID, facility);
 }
 
@@ -237,7 +229,6 @@ void str_to_mac(char *str, uint8_t * mac)
 		mac[i] = hex_digit(str[2 * i]) << 4;
 		mac[i] |= hex_digit(str[1 + 2 * i]);
 	}
-
 }
 
 static inline uint16_t hash_key(uint8_t * mac)
@@ -265,7 +256,7 @@ int add_client(uint8_t * mac, uint16_t rvlan)
 	int i;
 	i = find_client(mac);
 	if (i >= 0) {
-		err_msg("%s in table\n", mac_to_str(mac));
+		err_msg("%s in client table", mac_to_str(mac));
 		clients[i].rvlan = rvlan;
 		return -1;
 	}
@@ -305,7 +296,7 @@ void read_client_config(char *fname)
 	char buf[MAXLEN];
 	fp = fopen(fname, "r");
 	if (fp == NULL) {
-		printf("open file %s error, exit.\n", fname);
+		err_msg("open file %s error, exit.", fname);
 		exit(0);
 	}
 	while (fgets(buf, MAXLEN, fp)) {
@@ -358,12 +349,17 @@ void print_client_config()
 	struct _client_hash *h;
 	for (i = 0; i < HASHBKT; i++)
 		if (client_hash[i]) {
-			err_msg("hash %d: ", i);
+			char buf[MAXLEN];
+			int l;
+			l = snprintf(buf, MAXLEN, "hash %d:", i);
 			h = client_hash[i];
 			while (h) {
-				err_msg("%d", h->idx);
+				if (l > MAXLEN - 10)
+					break;
+				l += snprintf(buf + l, MAXLEN - l, " %d", h->idx);
 				h = h->next;
 			}
+			err_msg("%s", buf);
 		}
 }
 
@@ -408,7 +404,7 @@ void read_router_config(char *fname)
 	char buf[MAXLEN];
 	fp = fopen(fname, "r");
 	if (fp == NULL) {
-		err_msg("open file %s error, exit.\n", fname);
+		err_msg("open file %s error, exit.", fname);
 		exit(0);
 	}
 	while (fgets(buf, MAXLEN, fp)) {
@@ -543,10 +539,8 @@ char *stamp(void)
 	struct timeval tv;
 	struct timezone tz;
 	struct tm *tm;
-
 	gettimeofday(&tv, &tz);
 	tm = localtime(&tv.tv_sec);
-
 	snprintf(st_buf, 200, "%02d%02d %02d:%02d:%02d.%06ld", tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec, tv.tv_usec);
 	return st_buf;
 }
@@ -554,7 +548,6 @@ char *stamp(void)
 void printPacket(EtherPacket * packet, ssize_t packetSize, char *message)
 {
 	printf("%s ", stamp());
-
 	if ((ntohl(packet->VLANTag) >> 16) == 0x8100)	// VLAN tag
 		printf("%s #%04x (VLAN %d) from %04x%08x to %04x%08x, len=%d\n",
 		       message, ntohs(packet->type),
@@ -653,8 +646,8 @@ void process_client_to_router(void)
 
 		if (debug) {
 			printPacket((EtherPacket *) (buf + offset), len, "from client :");
-			if (offset)
-				printf("offset=%d\n", offset);
+			//              if (offset)
+			//              printf("offset=%d\n", offset);
 		}
 		int i = find_client(buf + offset + 6);
 		if (i < 0) {
@@ -680,8 +673,8 @@ void process_client_to_router(void)
 		tag->vlan_tci = htons(clients[i].rvlan & 0xfff);
 		if (debug) {
 			printPacket((EtherPacket *) (buf + offset), len, "sendto router:");
-			if (offset)
-				printf("offset=%d\n", offset);
+			//if (offset)
+			//              printf("offset=%d\n", offset);
 			printf("\n");
 		}
 
@@ -780,8 +773,8 @@ void process_router_to_client(void)
 
 		if (debug) {
 			printPacket((EtherPacket *) (buf + offset), len, "from router :");
-			if (offset)
-				printf("offset=%d\n", offset);
+			// if (offset)
+			//      printf("offset=%d\n", offset);
 		}
 		tag = (struct vlan_tag *)(buf + offset + 12);
 		if (tag->vlan_tpid != 0x0081) {	// vlan 
@@ -815,8 +808,8 @@ void process_router_to_client(void)
 			tag->vlan_tci = htons(clients[i].vlan & 0xfff);
 			if (debug) {
 				printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
-				if (offset)
-					printf("offset=%d\n", offset);
+				//if (offset)
+				//      printf("offset=%d\n", offset);
 				printf("\n");
 			}
 			clients[i].recv_pkts++;
@@ -848,8 +841,8 @@ void process_router_to_client(void)
 			tag->vlan_tci = htons(clients[i].vlan & 0xfff);
 			if (debug) {
 				printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
-				if (offset)
-					printf("offset=%d\n", offset);
+				//if (offset)
+				//      printf("offset=%d\n", offset);
 				printf("\n");
 			}
 
@@ -934,9 +927,7 @@ int main(int argc, char *argv[])
 	fdraw_client = open_rawsocket(dev_client, &ifindex_client);
 	fdraw_router = open_rawsocket(dev_router, &ifindex_router);
 
-	// create a pthread to forward packets from client to router
-	if (pthread_create(&tid, NULL, (void *)process_client_to_router, NULL)
-	    != 0)
+	if (pthread_create(&tid, NULL, (void *)process_client_to_router, NULL) != 0)
 		err_sys("pthread_create client_to_router error");
 
 	//  forward packets from router to client
