@@ -87,6 +87,7 @@ volatile int total_client = 0;
 
 int daemon_proc;		/* set nonzero by daemon_init() */
 int debug = 0;
+int forward_multicast = 0;
 
 char client_config[MAXLEN], router_config[MAXLEN];
 char dev_client[MAXLEN], dev_router[MAXLEN];
@@ -448,6 +449,7 @@ void print_router_config()
 	err_msg("======================");
 	err_msg("router config file: %s", router_config);
 	err_msg("router network dev: %s", dev_router);
+	err_msg("forward multicast from router: %d", forward_multicast);
 	err_msg("routers:");
 	err_msg("idx MAC         rvlan send_pkt send_byte bcast_pkt bcast_byte");
 	for (i = 0; i < total_router; i++)
@@ -789,7 +791,7 @@ void process_router_to_client(void)
 		}
 		Debug("router index %d, tpid: %04X, rvlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
 
-		if (memcmp(buf + offset, "\xff\xff\xff\xff\xff\xff", 6) != 0) {	// not a broadcast packet
+		if (!(forward_multicast && (buf[offset] & 1)) && (memcmp(buf + offset, "\xff\xff\xff\xff\xff\xff", 6) != 0)) {	// not a broadcast packet
 			routers[i].send_pkts++;
 			routers[i].send_bytes += len;
 			i = find_client(buf + offset);
@@ -862,7 +864,8 @@ void usage(void)
 	printf("Usage:\n");
 	printf("./MacAnyVlan [ options ] \n");
 	printf(" options:\n");
-	printf("    -d                enable debug\n");
+	printf("    -d     enable debug\n");
+	printf("    -m     forward multicast packet from router\n");
 	printf("    -c client_config\n");
 	printf("    -r router_config\n");
 	printf(" HUP  signal: reread config file\n");
@@ -881,6 +884,8 @@ int main(int argc, char *argv[])
 			break;
 		if (strcmp(argv[i], "-d") == 0)
 			debug = 1;
+		else if (strcmp(argv[i], "-m") == 0)
+			forward_multicast = 1;
 		else if (strcmp(argv[i], "-c") == 0) {
 			i++;
 			if (argc - i <= 0)
