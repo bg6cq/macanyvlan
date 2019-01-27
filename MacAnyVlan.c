@@ -37,6 +37,8 @@
 
 #define MAXCLIENT		200
 
+#define HASHBKT			(MAXCLIENT *2)
+
 #define VLAN_TAG_LEN   4
 struct vlan_tag {
 	u_int16_t vlan_tpid;	/* ETH_P_8021Q */
@@ -54,6 +56,11 @@ struct _EtherHeader {
 } __attribute__ ((packed));
 
 typedef struct _EtherHeader EtherPacket;
+
+struct _client_hash {
+	uint16_t idx;
+	struct _client_hash *next;
+} *client_hash[HASHBKT];
 
 volatile struct client_info {
 	uint8_t mac[6];
@@ -233,12 +240,23 @@ void str_to_mac(char *str, uint8_t * mac)
 
 }
 
+static inline uint16_t hash_key(uint8_t * mac)
+{
+	uint16_t k = 0;
+	k = ((mac[0] + mac[2] + mac[4]) << 8) + mac[1] + mac[3] + mac[5];
+	k = k % HASHBKT;
+	return k;
+}
+
 int find_client(uint8_t * mac)
 {
-	int i;
-	for (i = 0; i < total_client; i++)
-		if (memcmp((void *)clients[i].mac, mac, 6) == 0)
-			return i;
+	struct _client_hash *h;
+	h = client_hash[hash_key(mac)];
+	while (h) {
+		if (memcmp((void *)clients[h->idx].mac, mac, 6) == 0)
+			return h->idx;
+		h = h->next;
+	}
 	return -1;
 }
 
@@ -247,18 +265,28 @@ int add_client(uint8_t * mac, uint16_t rvlan)
 	int i;
 	i = find_client(mac);
 	if (i >= 0) {
-		Debug("%s in table\n", mac_to_str(mac));
+		err_msg("%s in table\n", mac_to_str(mac));
 		clients[i].rvlan = rvlan;
 		return -1;
 	}
 	if (total_client == MAXCLIENT - 1) {
-		Debug("Too many client\n");
+		err_msg("Too many client\n");
 		return -1;
 	}
 	memcpy((void *)clients[total_client].mac, mac, 6);
 	clients[total_client].last_see = 0;
 	clients[total_client].rvlan = rvlan;
 	clients[total_client].vlan = 0;
+	struct _client_hash *h;
+	h = malloc(sizeof(struct _client_hash));
+	if (h == NULL) {
+		err_msg("no free memory");
+		return -1;
+	}
+	h->idx = total_client;
+	uint16_t hidx = hash_key(mac);
+	h->next = client_hash[hidx];
+	client_hash[hidx] = h;
 	total_client++;
 	return 0;
 }
@@ -326,6 +354,17 @@ void print_client_config()
 	for (i = 0; i < total_client; i++)
 		err_msg("%3d %s %4d %4d %ld %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlan,
 			(long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
+	err_msg("client hash:");
+	struct _client_hash *h;
+	for (i = 0; i < HASHBKT; i++)
+		if (client_hash[i]) {
+			err_msg("hash %d: ", i);
+			h = client_hash[i];
+			while (h) {
+				err_msg("%d", h->idx);
+				h = h->next;
+			}
+		}
 }
 
 int find_router(uint8_t * mac, uint16_t rvlan)
@@ -342,11 +381,11 @@ int add_router(uint8_t * mac, uint16_t rvlan)
 	int i;
 	i = find_router(mac, rvlan);
 	if (i >= 0) {
-		Debug("%s in table\n", mac_to_str(mac));
+		err_msg("%s in table\n", mac_to_str(mac));
 		return -1;
 	}
 	if (total_router == MAXCLIENT - 1) {
-		Debug("Too many router\n");
+		err_msg("Too many router\n");
 		return -1;
 	}
 	memcpy((void *)routers[total_router].mac, mac, 6);
@@ -369,7 +408,7 @@ void read_router_config(char *fname)
 	char buf[MAXLEN];
 	fp = fopen(fname, "r");
 	if (fp == NULL) {
-		printf("open file %s error, exit.\n", fname);
+		err_msg("open file %s error, exit.\n", fname);
 		exit(0);
 	}
 	while (fgets(buf, MAXLEN, fp)) {
