@@ -656,7 +656,7 @@ void process_client_to_router(void)
 		}
 
 		tag = (struct vlan_tag *)(buf + offset + 12);
-		Debug("client index %d, tpid: %04X, vlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
+		Debug("client index %d, tpid: %04X, vlan: %d, rvlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff, clients[i].rvlan);
 
 		if (tag->vlan_tpid != 0x0081) {	// vlan 
 			Debug("ignore tpid %04X packet\n", tag->vlan_tpid);
@@ -787,7 +787,7 @@ void process_router_to_client(void)
 			Debug("unknow router, ignore\n");
 			continue;
 		}
-		Debug("router index %d, tpid: %04X, vlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
+		Debug("router index %d, tpid: %04X, rvlan: %d", i, tag->vlan_tpid, ntohs(tag->vlan_tci) & 0xfff);
 
 		if (memcmp(buf + offset, "\xff\xff\xff\xff\xff\xff", 6) != 0) {	// not a broadcast packet
 			routers[i].send_pkts++;
