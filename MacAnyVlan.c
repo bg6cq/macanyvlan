@@ -345,9 +345,9 @@ void print_client_config()
 	err_msg("client config file: %s", client_config);
 	err_msg("client network dev: %s", dev_client);
 	err_msg("clients:");
-	err_msg("idx MAC         rvlan vlano vlani last_see send_pkts send_bytes recv_pkts recv_bytes");
+	err_msg("idx MAC         rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
-		err_msg("%3d %s %4d %4d %4d %ld %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlano,
+		err_msg("%3d %s %4d %d.%d %ld %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlano,
 			clients[i].vlani, (long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
 	err_msg("client hash:");
 	struct _client_hash *h;
@@ -695,7 +695,7 @@ void process_client_to_router(void)
 				Debug("client index %d, tpid: %04X/%04X, vlan: %d.%d, rvlan: %d", i, ntohs(tag1->vlan_tpid),
 				      ntohs(tag2->vlan_tpid), ntohs(tag1->vlan_tci) & 0xfff, ntohs(tag2->vlan_tci) & 0xfff, clients[i].rvlan);
 			else
-				Debug("client index %d, tpid: %04X, vlan: %d, rvlan: %d", i, ntohs(tag1->vlan_tpid),
+				Debug("client index %d, tpid: %04X, vlan: %d.0, rvlan: %d", i, ntohs(tag1->vlan_tpid),
 				      ntohs(tag1->vlan_tci) & 0xfff, clients[i].rvlan);
 		}
 
@@ -779,12 +779,12 @@ void process_router_to_client(void)
 #endif
 				continue;
 
-			Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
+			// Debug("len=%d, iov_len=%d, ", len, (int)iov.iov_len);
 
 			len = len > iov.iov_len ? iov.iov_len : len;
 			if (len < 12)	// MAC_len * 2
 				break;
-			Debug("len=%d", len);
+			// Debug("len=%d", len);
 
 			memmove(buf + VLAN_TAG_LEN, buf + VLAN_TAG_LEN + VLAN_TAG_LEN, 12);
 			offset = VLAN_TAG_LEN;
@@ -793,7 +793,7 @@ void process_router_to_client(void)
 			 * Now insert the tag.
 			 */
 			tag = (struct vlan_tag *)(buf + VLAN_TAG_LEN + 12);
-			Debug("insert vlan id, recv len=%d", len);
+			// Debug("insert vlan id, recv len=%d", len);
 
 #ifdef TP_STATUS_VLAN_TPID_VALID
 			tag->vlan_tpid = ((aux->tp_vlan_tpid || (aux->tp_status & TP_STATUS_VLAN_TPID_VALID)) ? aux->tp_vlan_tpid : 0x0081);
