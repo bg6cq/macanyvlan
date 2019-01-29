@@ -65,7 +65,8 @@ struct _client_hash {
 volatile struct client_info {
 	uint8_t mac[6];
 	time_t last_see;
-	uint16_t vlan;
+	uint16_t vlano;
+	uint16_t vlani;
 	uint16_t rvlan;
 	uint64_t send_pkts;
 	uint64_t send_bytes;
@@ -88,6 +89,7 @@ volatile int total_client = 0;
 int daemon_proc;		/* set nonzero by daemon_init() */
 int debug = 0;
 int forward_multicast = 0;
+uint16_t qinq_tpid = 0x8100;
 
 char client_config[MAXLEN], router_config[MAXLEN];
 char dev_client[MAXLEN], dev_router[MAXLEN];
@@ -268,7 +270,8 @@ int add_client(uint8_t * mac, uint16_t rvlan)
 	memcpy((void *)clients[total_client].mac, mac, 6);
 	clients[total_client].last_see = 0;
 	clients[total_client].rvlan = rvlan;
-	clients[total_client].vlan = 0;
+	clients[total_client].vlano = 0;
+	clients[total_client].vlani = 0;
 	struct _client_hash *h;
 	h = malloc(sizeof(struct _client_hash));
 	if (h == NULL) {
@@ -344,8 +347,8 @@ void print_client_config()
 	err_msg("clients:");
 	err_msg("idx MAC         rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
-		err_msg("%3d %s %4d %4d %ld %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlan,
-			(long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
+		err_msg("%3d %s %4d %d.%d %ld %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlano,
+			clients[i].vlani, (long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
 	err_msg("client hash:");
 	struct _client_hash *h;
 	for (i = 0; i < HASHBKT; i++)
@@ -549,14 +552,29 @@ char *stamp(void)
 
 void printPacket(EtherPacket * packet, ssize_t packetSize, char *message)
 {
+	int vlan_tags = 0;	// 0 no vlan, 1 single vlan, 2 qinq vlan
+	struct vlan_tag *tag1, *tag2;
 	printf("%s ", stamp());
-	if ((ntohl(packet->VLANTag) >> 16) == 0x8100)	// VLAN tag
-		printf("%s #%04x (VLAN %d) from %04x%08x to %04x%08x, len=%d\n",
-		       message, ntohs(packet->type),
-		       ntohl(packet->VLANTag) & 0xFFF, ntohs(packet->srcMAC1),
+	tag1 = (struct vlan_tag *)((uint8_t *) packet + 12);
+	if ((tag1->vlan_tpid == htons(qinq_tpid)) || (tag1->vlan_tpid == 0x0081)) {
+		tag2 = (struct vlan_tag *)((uint8_t *) packet + 16);
+		if (tag2->vlan_tpid == 0x0081)
+			vlan_tags = 2;
+		else
+			vlan_tags = 1;
+	}
+	if (vlan_tags == 2) {
+		printf("%s #%04X/%04X (VLAN %d.%d) from %04X%08X to %04X%08X, len=%d\n",
+		       message, ntohs(tag1->vlan_tpid), ntohs(tag2->vlan_tpid),
+		       ntohs(tag1->vlan_tci) & 0xFFF, ntohs(tag2->vlan_tci) & 0xfff, ntohs(packet->srcMAC1),
+		       ntohl(packet->srcMAC2), ntohs(packet->destMAC1), ntohl(packet->destMAC2), (int)packetSize);
+	} else if (vlan_tags == 1)	// VLAN tag
+		printf("%s #%04X (VLAN %d) from %04X%08X to %04X%08X, len=%d\n",
+		       message, ntohs(tag1->vlan_tpid),
+		       ntohs(tag1->vlan_tci) & 0xFFF, ntohs(packet->srcMAC1),
 		       ntohl(packet->srcMAC2), ntohs(packet->destMAC1), ntohl(packet->destMAC2), (int)packetSize);
 	else
-		printf("%s #%04x (no VLAN) from %04x%08x to %04x%08x, len=%d\n",
+		printf("%s #%04X (no VLAN) from %04X%08X to %04X%08X, len=%d\n",
 		       message, ntohl(packet->VLANTag) >> 16,
 		       ntohs(packet->srcMAC1), ntohl(packet->srcMAC2), ntohs(packet->destMAC1), ntohl(packet->destMAC2), (int)packetSize);
 	fflush(stdout);
@@ -564,7 +582,7 @@ void printPacket(EtherPacket * packet, ssize_t packetSize, char *message)
 
 void process_client_to_router(void)
 {
-	u_int8_t buf[MAX_PACKET_SIZE + VLAN_TAG_LEN];
+	u_int8_t buf[MAX_PACKET_SIZE + VLAN_TAG_LEN * 2];
 	int len;
 	int offset = 0;
 
@@ -595,7 +613,7 @@ void process_client_to_router(void)
 			err_msg("recv long pkt from raw, len=%d", len);
 			len = MAX_PACKET_SIZE;
 		}
-		struct vlan_tag *tag;
+		struct vlan_tag *tag, *tag1, *tag2;
 		for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
 			struct tpacket_auxdata *aux;
 			if (cmsg->cmsg_len < CMSG_LEN(sizeof(struct tpacket_auxdata))
@@ -657,16 +675,38 @@ void process_client_to_router(void)
 			continue;
 		}
 
-		tag = (struct vlan_tag *)(buf + offset + 12);
-		Debug("client index %d, tpid: %04X, vlan: %d, rvlan: %d", i, ntohs(tag->vlan_tpid), ntohs(tag->vlan_tci) & 0xfff, clients[i].rvlan);
+		int vlan_tags = 0;
+		tag1 = (struct vlan_tag *)(buf + offset + 12);
+		tag2 = (struct vlan_tag *)(buf + offset + 16);
+		if ((tag1->vlan_tpid == htons(qinq_tpid)) || (tag1->vlan_tpid == 0x0081)) {
+			if (tag2->vlan_tpid == 0x0081)
+				vlan_tags = 2;
+			else
+				vlan_tags = 1;
+		}
 
-		if (tag->vlan_tpid != 0x0081) {	// vlan 
-			Debug("ignore tpid %04X packet\n", ntohs(tag->vlan_tpid));
+		if (vlan_tags == 0) {	// not a 802.1Q packet?
+			Debug("ignore tpid %04X packet\n", ntohs(tag1->vlan_tpid));
 			continue;
 		}
 
+		if (debug) {
+			if (vlan_tags == 2)
+				Debug("client index %d, tpid: %04X/%04X, vlan: %d.%d, rvlan: %d", i, ntohs(tag1->vlan_tpid),
+				      ntohs(tag2->vlan_tpid), ntohs(tag1->vlan_tci) & 0xfff, ntohs(tag2->vlan_tci) & 0xfff, clients[i].rvlan);
+			else
+				Debug("client index %d, tpid: %04X, vlan: %d.0, rvlan: %d", i, ntohs(tag1->vlan_tpid),
+				      ntohs(tag1->vlan_tci) & 0xfff, clients[i].rvlan);
+		}
+
 		clients[i].last_see = time(NULL);
-		clients[i].vlan = ntohs(tag->vlan_tci) & 0xfff;
+		if (vlan_tags == 2) {
+			clients[i].vlano = ntohs(tag1->vlan_tci) & 0xfff;
+			clients[i].vlani = ntohs(tag2->vlan_tci) & 0xfff;
+		} else {
+			clients[i].vlano = ntohs(tag1->vlan_tci) & 0xfff;
+			clients[i].vlani = 0;
+		}
 		clients[i].send_pkts++;
 		clients[i].send_bytes += len;
 		// Debug("vlan: %d", clients[i].vlan);
@@ -691,7 +731,7 @@ void process_client_to_router(void)
 
 void process_router_to_client(void)
 {
-	u_int8_t buf[MAX_PACKET_SIZE + VLAN_TAG_LEN];
+	u_int8_t buf[MAX_PACKET_SIZE + VLAN_TAG_LEN * 2];
 	int len;
 	int offset = 0;
 
@@ -712,7 +752,7 @@ void process_router_to_client(void)
 		msg.msg_controllen = sizeof(cmsg_buf);
 		msg.msg_flags = 0;
 
-		offset = VLAN_TAG_LEN;
+		offset = VLAN_TAG_LEN * 2;
 		iov.iov_len = MAX_PACKET_SIZE;
 		iov.iov_base = buf + offset;
 		len = recvmsg(fdraw_router, &msg, MSG_TRUNC);
@@ -746,13 +786,13 @@ void process_router_to_client(void)
 				break;
 			// Debug("len=%d", len);
 
-			memmove(buf, buf + VLAN_TAG_LEN, 12);
-			offset = 0;
+			memmove(buf + VLAN_TAG_LEN, buf + VLAN_TAG_LEN + VLAN_TAG_LEN, 12);
+			offset = VLAN_TAG_LEN;
 
 			/*
 			 * Now insert the tag.
 			 */
-			tag = (struct vlan_tag *)(buf + 12);
+			tag = (struct vlan_tag *)(buf + VLAN_TAG_LEN + 12);
 			// Debug("insert vlan id, recv len=%d", len);
 
 #ifdef TP_STATUS_VLAN_TPID_VALID
@@ -800,14 +840,24 @@ void process_router_to_client(void)
 				continue;
 			}
 
-			Debug("client index %d, vlan: %d", i, clients[i].vlan);
+			Debug("client index %d, vlan: %d.%d", i, clients[i].vlano, clients[i].vlani);
 
 			if (rvlan != clients[i].rvlan) {
 				Debug("routervlan %d is not the same as client rvlan %d, ignore\n", rvlan, clients[i].rvlan);
 				continue;
 			}
 			// change to client vlan
-			tag->vlan_tci = htons(clients[i].vlan & 0xfff);
+			if (clients[i].vlani == 0)
+				tag->vlan_tci = htons(clients[i].vlano & 0xfff);
+			else {
+				tag->vlan_tci = htons(clients[i].vlani & 0xfff);
+				offset -= 4;
+				memcpy(buf + offset, buf + offset + 4, 12);
+				tag = (struct vlan_tag *)(buf + offset + 12);
+				tag->vlan_tci = htons(clients[i].vlano & 0xfff);
+				tag->vlan_tpid = htons(qinq_tpid);
+				len += 4;
+			}
 			if (debug) {
 				printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
 				//if (offset)
@@ -830,30 +880,58 @@ void process_router_to_client(void)
 		routers[i].bcast_bytes += len;
 		uint8_t vlan_send[4096];
 		memset(vlan_send, 0, 4096);
+		u_int8_t buf2[MAX_PACKET_SIZE + VLAN_TAG_LEN * 2];
+		int buf2_ready = 0;
 		for (i = 0; i < total_client; i++) {
-			if (vlan_send[clients[i].vlan])
+			if (vlan_send[clients[i].vlano])
 				continue;
 			if (rvlan != clients[i].rvlan)
 				continue;
-			vlan_send[clients[i].vlan] = 1;
+			vlan_send[clients[i].vlano] = 1;
 
-			Debug("client index %d, vlan: %d", i, clients[i].vlan);
+			Debug("client index %d, vlan: %d.%d", i, clients[i].vlano, clients[i].vlani);
 
-			// change to client vlan
-			tag->vlan_tci = htons(clients[i].vlan & 0xfff);
-			if (debug) {
-				printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
-				//if (offset)
-				//      printf("offset=%d\n", offset);
-				printf("\n");
+			if (clients[i].vlani == 0) {
+				// change to client vlan
+				tag->vlan_tci = htons(clients[i].vlano & 0xfff);
+				if (debug) {
+					printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
+					//if (offset)
+					//      printf("offset=%d\n", offset);
+					printf("\n");
+				}
+
+				struct sockaddr_ll sll;
+				memset(&sll, 0, sizeof(sll));
+				sll.sll_family = AF_PACKET;
+				sll.sll_protocol = htons(ETH_P_ALL);
+				sll.sll_ifindex = ifindex_client;
+				sendto(fdraw_client, buf + offset, len, 0, (struct sockaddr *)&sll, sizeof(sll));
+			} else {
+				if (buf2_ready == 0) {
+					memcpy(buf2, buf + offset, 12);	// packet header
+					memcpy(buf2 + 16, buf + offset + 12, len - 12);	// pakcet
+					tag = (struct vlan_tag *)(buf2 + 12);
+					tag->vlan_tpid = ntohs(qinq_tpid);
+				}
+				tag = (struct vlan_tag *)(buf2 + 12);
+				tag->vlan_tci = htons(clients[i].vlano & 0xfff);
+				tag = (struct vlan_tag *)(buf2 + 16);
+				tag->vlan_tci = htons(clients[i].vlani & 0xfff);
+				if (debug) {
+					printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
+					//if (offset)
+					//      printf("offset=%d\n", offset);
+					printf("\n");
+				}
+
+				struct sockaddr_ll sll;
+				memset(&sll, 0, sizeof(sll));
+				sll.sll_family = AF_PACKET;
+				sll.sll_protocol = htons(ETH_P_ALL);
+				sll.sll_ifindex = ifindex_client;
+				sendto(fdraw_client, buf2, len + 4, 0, (struct sockaddr *)&sll, sizeof(sll));
 			}
-
-			struct sockaddr_ll sll;
-			memset(&sll, 0, sizeof(sll));
-			sll.sll_family = AF_PACKET;
-			sll.sll_protocol = htons(ETH_P_ALL);
-			sll.sll_ifindex = ifindex_client;
-			sendto(fdraw_client, buf + offset, len, 0, (struct sockaddr *)&sll, sizeof(sll));
 		}
 	}
 }
