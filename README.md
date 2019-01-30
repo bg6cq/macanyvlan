@@ -1,10 +1,5 @@
 # MacAnyVlan
 
-## Sample config
-
-![Sample config](img/sample.png)
-
-
 ## 实际应用： 视频会议终端与路由器不在同一个vlan
 
 ![IMG](img/mvc.png)
@@ -82,3 +77,8 @@ USTC-N7K-1# show mac add address f025.72a8.fe42
 * 50       f025.72a8.fe42    dynamic     ~~~      F    F  Eth1/5
 * 642      f025.72a8.fe42    dynamic     ~~~      F    F  Eth1/16
 ```
+
+
+## Sample config
+
+![Sample config](img/sample.png)
