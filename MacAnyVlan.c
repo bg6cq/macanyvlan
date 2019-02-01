@@ -87,8 +87,10 @@ volatile int total_router = 0;
 volatile int total_client = 0;
 
 int daemon_proc;		/* set nonzero by daemon_init() */
+int pid;
 int debug = 0;
 int forward_multicast = 0;
+int client_timeout = 3600;
 uint16_t qinq_tpid = 0x8100;
 
 char client_config[MAXLEN], router_config[MAXLEN];
@@ -105,6 +107,12 @@ void err_msg(const char *fmt, ...);
 
 void sig_handler_hup(int signo)
 {
+	if (pid > 0) {
+		kill(pid, SIGHUP);
+		return;
+	}
+	if (pid != 0)
+		return;
 	err_msg("reread config file...");
 	read_client_config(client_config);
 	read_router_config(router_config);
@@ -114,9 +122,25 @@ void sig_handler_hup(int signo)
 
 void sig_handler_usr1(int signo)
 {
-	int i;
+	if (pid > 0) {
+		kill(pid, SIGUSR1);
+		return;
+	}
+	if (pid != 0)
+		return;
 	print_client_config();
 	print_router_config();
+}
+
+void sig_handler_usr2(int signo)
+{
+	int i;
+	if (pid > 0) {
+		kill(pid, SIGUSR2);
+		return;
+	}
+	if (pid != 0)
+		return;
 	for (i = 0; i < total_client; i++)
 		clients[i].send_pkts = clients[i].send_bytes = clients[i].recv_pkts = clients[i].recv_bytes = 0;
 	for (i = 0; i < total_router; i++)
@@ -344,12 +368,14 @@ void print_client_config()
 	err_msg("======================");
 	err_msg("client config file: %s", client_config);
 	err_msg("client network dev: %s", dev_client);
+	err_msg("client timeout: %d", client_timeout);
 	err_msg("clients:");
 	err_msg("idx MAC         rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
-		err_msg("%3d %s %4d %d.%d %ld %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlano,
-			clients[i].vlani, (long)clients[i].last_see, clients[i].send_pkts, clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
-	err_msg("client hash:");
+		err_msg("%3d %s %4d %d.%d %ld %ld %ld %ld %ld", i, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlano,
+			clients[i].vlani, clients[i].last_see == 0 ? -1 : (long)(time(NULL) - clients[i].last_see), clients[i].send_pkts, clients[i].send_bytes,
+			clients[i].recv_pkts, clients[i].recv_bytes);
+	err_msg("client hashtable:");
 	struct _client_hash *h;
 	for (i = 0; i < HASHBKT; i++)
 		if (client_hash[i]) {
@@ -381,7 +407,7 @@ int add_router(uint8_t * mac, uint16_t rvlan)
 	int i;
 	i = find_router(mac, rvlan);
 	if (i >= 0) {
-		err_msg("%s in table\n", mac_to_str(mac));
+		err_msg("%s in router table", mac_to_str(mac));
 		return -1;
 	}
 	if (total_router == MAXCLIENT - 1) {
@@ -456,7 +482,7 @@ void print_router_config()
 	err_msg("routers:");
 	err_msg("idx MAC         rvlan send_pkt send_byte bcast_pkt bcast_byte");
 	for (i = 0; i < total_router; i++)
-		err_msg("%3d %s %4d %ld %ld %ld %ld", i + 1, mac_to_str((uint8_t *) routers[i].mac), routers[i].rvlan,
+		err_msg("%3d %s %4d %ld %ld %ld %ld", i, mac_to_str((uint8_t *) routers[i].mac), routers[i].rvlan,
 			routers[i].send_pkts, routers[i].send_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
 }
 
@@ -846,6 +872,15 @@ void process_router_to_client(void)
 				Debug("routervlan %d is not the same as client rvlan %d, ignore\n", rvlan, clients[i].rvlan);
 				continue;
 			}
+
+			if (client_timeout > 0) {
+				time_t now_t;
+				now_t = time(NULL);
+				if (now_t - clients[i].last_see > client_timeout) {
+					Debug("client idle for %d seconds > client_timeout %d, ignore\n", now_t - clients[i].last_see, client_timeout);
+					continue;
+				}
+			}
 			// change to client vlan
 			if (clients[i].vlani == 0)
 				tag->vlan_tci = htons(clients[i].vlano & 0xfff);
@@ -882,16 +917,25 @@ void process_router_to_client(void)
 		memset(vlan_send, 0, 4096);
 		u_int8_t buf2[MAX_PACKET_SIZE + VLAN_TAG_LEN * 2];
 		int buf2_ready = 0;
+		time_t now_t;
+		if (client_timeout > 0)
+			now_t = time(NULL);
 		for (i = 0; i < total_client; i++) {
 			if (vlan_send[clients[i].vlano])
 				continue;
 			if (rvlan != clients[i].rvlan)
 				continue;
-			vlan_send[clients[i].vlano] = 1;
 
 			Debug("client index %d, vlan: %d.%d", i, clients[i].vlano, clients[i].vlani);
+			if (client_timeout > 0) {
+				if (now_t - clients[i].last_see > client_timeout) {
+					Debug("client idle for %d seconds > client_timeout %d, ignore\n", now_t - clients[i].last_see, client_timeout);
+					continue;
+				}
+			}
+			vlan_send[clients[i].vlano] = 1;
 
-			if (clients[i].vlani == 0) {
+			if (clients[i].vlani == 0) {	// single VLAN
 				// change to client vlan
 				tag->vlan_tci = htons(clients[i].vlano & 0xfff);
 				if (debug) {
@@ -907,12 +951,13 @@ void process_router_to_client(void)
 				sll.sll_protocol = htons(ETH_P_ALL);
 				sll.sll_ifindex = ifindex_client;
 				sendto(fdraw_client, buf + offset, len, 0, (struct sockaddr *)&sll, sizeof(sll));
-			} else {
+			} else {	// QinQ vlan
 				if (buf2_ready == 0) {
 					memcpy(buf2, buf + offset, 12);	// packet header
 					memcpy(buf2 + 16, buf + offset + 12, len - 12);	// pakcet
 					tag = (struct vlan_tag *)(buf2 + 12);
 					tag->vlan_tpid = ntohs(qinq_tpid);
+					buf2_ready = 1;
 				}
 				tag = (struct vlan_tag *)(buf2 + 12);
 				tag->vlan_tci = htons(clients[i].vlano & 0xfff);
@@ -940,14 +985,14 @@ void usage(void)
 {
 	printf("MacAnyVlan Version: %s, by james@ustc.edu.cn (https://github.com/bg6cq/macanyvlan)\n", VERSION);
 	printf("Usage:\n");
-	printf("./MacAnyVlan [ options ] \n");
+	printf("./MacAnyVlan [ options ] -c client_config -r router_config\n");
 	printf(" options:\n");
 	printf("    -d     enable debug\n");
 	printf("    -m     forward multicast packet from router\n");
-	printf("    -c client_config\n");
-	printf("    -r router_config\n");
-	printf(" HUP  signal: reread config file\n");
-	printf(" USR1 signal: print information & reset statistics\n");
+	printf("    -t client_timeout      default is 3600\n");
+	printf("HUP  signal: reread config file\n");
+	printf("USR1 signal: print information\n");
+	printf("USR2 signal: reset statistics\n");
 	exit(0);
 }
 
@@ -964,7 +1009,12 @@ int main(int argc, char *argv[])
 			debug = 1;
 		else if (strcmp(argv[i], "-m") == 0)
 			forward_multicast = 1;
-		else if (strcmp(argv[i], "-c") == 0) {
+		else if (strcmp(argv[i], "-t") == 0) {
+			i++;
+			if (argc - i <= 0)
+				usage();
+			client_timeout = atoi(argv[i]);
+		} else if (strcmp(argv[i], "-c") == 0) {
 			i++;
 			if (argc - i <= 0)
 				usage();
@@ -982,6 +1032,9 @@ int main(int argc, char *argv[])
 			i++;
 	}
 	while (got_one);
+
+	if (dev_client[0] == 0 || dev_router[0] == 0)
+		usage();
 	if (debug) {
 		printf("         debug = 1\n");
 		print_client_config();
@@ -989,23 +1042,27 @@ int main(int argc, char *argv[])
 		printf("\n");
 	}
 
-	if (debug == 0) {
+	if (debug == 0)
 		daemon_init("MacAnyVlan", LOG_DAEMON);
+
+	signal(SIGHUP, sig_handler_hup);
+	signal(SIGUSR1, sig_handler_usr1);
+	signal(SIGUSR2, sig_handler_usr2);
+
+	if (debug == 0) {
 		while (1) {
-			int pid;
 			pid = fork();
 			if (pid == 0)	// child do the job
 				break;
 			else if (pid == -1)	// error
 				exit(0);
-			else
-				wait(NULL);	// parent wait for child
+			else {
+				while (wait(NULL) < 0) ;	// parent wait for child
+				pid = -1;
+			}
 			sleep(2);	// wait 2 second, and rerun
 		}
 	}
-
-	signal(SIGHUP, sig_handler_hup);
-	signal(SIGUSR1, sig_handler_usr1);
 
 	fdraw_client = open_rawsocket(dev_client, &ifindex_client);
 	fdraw_router = open_rawsocket(dev_router, &ifindex_router);
