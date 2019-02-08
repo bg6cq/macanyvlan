@@ -57,13 +57,11 @@ struct _EtherHeader {
 
 typedef struct _EtherHeader EtherPacket;
 
-struct _client_hash {
-	uint16_t idx;
-	struct _client_hash *next;
-} *client_hash[HASHBKT];
+int client_hash[HASHBKT];
 
 volatile struct client_info {
 	uint8_t mac[6];
+	int hash_next;
 	time_t last_see;
 	uint16_t vlano;
 	uint16_t vlani;
@@ -268,12 +266,12 @@ static inline uint16_t hash_key(uint8_t * mac)
 
 int find_client(uint8_t * mac)
 {
-	struct _client_hash *h;
+	int h;
 	h = client_hash[hash_key(mac)];
-	while (h) {
-		if (memcmp((void *)clients[h->idx].mac, mac, 6) == 0)
-			return h->idx;
-		h = h->next;
+	while (h != -1) {
+		if (memcmp((void *)clients[h].mac, mac, 6) == 0)
+			return h;
+		h = clients[h].hash_next;
 	}
 	return -1;
 }
@@ -293,19 +291,13 @@ int add_client(uint8_t * mac, uint16_t rvlan)
 	}
 	memcpy((void *)clients[total_client].mac, mac, 6);
 	clients[total_client].last_see = 0;
+	clients[total_client].hash_next = -1;
 	clients[total_client].rvlan = rvlan;
 	clients[total_client].vlano = 0;
 	clients[total_client].vlani = 0;
-	struct _client_hash *h;
-	h = malloc(sizeof(struct _client_hash));
-	if (h == NULL) {
-		err_msg("no free memory");
-		return -1;
-	}
-	h->idx = total_client;
-	uint16_t hidx = hash_key(mac);
-	h->next = client_hash[hidx];
-	client_hash[hidx] = h;
+	int h = hash_key(mac);
+	clients[total_client].hash_next = client_hash[h];
+	client_hash[h] = total_client;
 	total_client++;
 	return 0;
 }
@@ -370,24 +362,24 @@ void print_client_config()
 	err_msg("client network dev: %s", dev_client);
 	err_msg("client timeout: %d", client_timeout);
 	err_msg("clients:");
-	err_msg("idx MAC         rvlan vlan last_see send_pkts send_bytes recv_pkts recv_bytes");
+	err_msg("idx MAC         rvlan vlan hash_next last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
-		err_msg("%3d %s %4d %d.%d %ld %ld %ld %ld %ld", i, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlano,
-			clients[i].vlani, clients[i].last_see == 0 ? -1 : (long)(time(NULL) - clients[i].last_see), clients[i].send_pkts, clients[i].send_bytes,
-			clients[i].recv_pkts, clients[i].recv_bytes);
+		err_msg("%3d %s %4d %d.%d %d %ld %ld %ld %ld %ld", i, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlano,
+			clients[i].vlani, clients[i].hash_next, clients[i].last_see == 0 ? -1 : (long)(time(NULL) - clients[i].last_see), clients[i].send_pkts,
+			clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
 	err_msg("client hashtable:");
-	struct _client_hash *h;
+	int16_t h;
 	for (i = 0; i < HASHBKT; i++)
-		if (client_hash[i]) {
+		if (client_hash[i] != -1) {
 			char buf[MAXLEN];
 			int l;
 			l = snprintf(buf, MAXLEN, "hash %d:", i);
 			h = client_hash[i];
-			while (h) {
+			while (h != -1) {
 				if (l > MAXLEN - 10)
 					break;
-				l += snprintf(buf + l, MAXLEN - l, " %d", h->idx);
-				h = h->next;
+				l += snprintf(buf + l, MAXLEN - l, " %d", h);
+				h = clients[h].hash_next;
 			}
 			err_msg("%s", buf);
 		}
@@ -1001,6 +993,11 @@ int main(int argc, char *argv[])
 	pthread_t tid;
 	int i = 1;
 	int got_one = 0;
+
+	for (i = 0; i < HASHBKT; i++)
+		client_hash[i] = -1;
+
+	i = 1;
 	do {
 		got_one = 1;
 		if (argc - i <= 0)
