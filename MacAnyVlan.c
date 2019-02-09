@@ -62,6 +62,7 @@ int client_hash[HASHBKT];
 volatile struct client_info {
 	uint8_t mac[6];
 	int hash_next;
+	int new;
 	time_t last_see;
 	uint16_t vlano;
 	uint16_t vlani;
@@ -283,23 +284,76 @@ int add_client(uint8_t * mac, uint16_t rvlan)
 	if (i >= 0) {
 		err_msg("%s in client table", mac_to_str(mac));
 		clients[i].rvlan = rvlan;
+		clients[i].new = 1;
 		return -1;
 	}
 	if (total_client == MAXCLIENT - 1) {
 		err_msg("Too many client\n");
 		return -1;
 	}
+	memset((void *)&clients[total_client], 0, sizeof(struct client_info));
 	memcpy((void *)clients[total_client].mac, mac, 6);
 	clients[total_client].last_see = 0;
 	clients[total_client].hash_next = -1;
 	clients[total_client].rvlan = rvlan;
 	clients[total_client].vlano = 0;
 	clients[total_client].vlani = 0;
+	clients[total_client].new = 1;
 	int h = hash_key(mac);
 	clients[total_client].hash_next = client_hash[h];
 	client_hash[h] = total_client;
 	total_client++;
 	return 0;
+}
+
+void del_client(int idx)
+{
+	int k;
+	if ((idx < 0) || (idx >= total_client)) {
+		err_msg("error del client %d", idx);
+		return;
+	}
+// del from hash
+	k = hash_key((uint8_t *) clients[idx].mac);
+	if (client_hash[k] == idx) {	// first hash
+		client_hash[k] = clients[idx].hash_next;
+	} else {
+		int h;
+		h = client_hash[k];
+		while (h != -1) {
+			if (clients[h].hash_next == idx) {
+				clients[h].hash_next = clients[idx].hash_next;
+				break;
+			}
+			h = clients[h].hash_next;
+		}
+	}
+// if last client, just return  
+	if (total_client == 1) {
+		total_client = 0;
+		err_msg("del last client");
+		return;
+	}
+// move last client in array to idx
+	memcpy((void *)&clients[idx], (void *)&clients[total_client - 1], sizeof(struct client_info));
+
+// change hash
+	k = hash_key((uint8_t *) clients[idx].mac);
+	if (client_hash[k] == total_client - 1) {	// first hash
+		client_hash[k] = idx;
+	} else {
+		int h;
+		h = client_hash[k];
+		while (h != -1) {
+			if (clients[h].hash_next == total_client - 1) {
+				clients[h].hash_next = idx;
+				break;
+			}
+			h = clients[h].hash_next;
+		}
+	}
+	total_client--;
+	err_msg("del client %d", idx);
 }
 
 /* client_config file
@@ -314,11 +368,14 @@ void read_client_config(char *fname)
 {
 	FILE *fp;
 	char buf[MAXLEN];
+	int i;
 	fp = fopen(fname, "r");
 	if (fp == NULL) {
 		err_msg("open file %s error, exit.", fname);
 		exit(0);
 	}
+	for (i = 0; i < total_client; i++)
+		clients[i].new = 0;
 	while (fgets(buf, MAXLEN, fp)) {
 		char *p;
 		uint8_t mac[6];
@@ -352,6 +409,12 @@ void read_client_config(char *fname)
 		add_client(mac, rvlan);
 	}
 	fclose(fp);
+	if (total_client == 0)
+		return;
+	for (i = total_client - 1; i >= 0; i--) {
+		if (clients[i].new == 0)
+			del_client(i);
+	}
 }
 
 void print_client_config()
