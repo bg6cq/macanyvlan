@@ -75,6 +75,7 @@ volatile struct client_info {
 
 volatile struct router_info {
 	uint8_t mac[6];
+	int new;
 	uint16_t rvlan;
 	uint64_t send_pkts;
 	uint64_t send_bytes;
@@ -420,10 +421,7 @@ void read_client_config(char *fname)
 void print_client_config()
 {
 	int i;
-	err_msg("======================");
-	err_msg("client config file: %s", client_config);
-	err_msg("client network dev: %s", dev_client);
-	err_msg("client timeout: %d", client_timeout);
+	err_msg("===== client config file: %s, network dev: %s, timeout: %d", client_config, dev_client, client_timeout);
 	err_msg("clients:");
 	err_msg("idx MAC         rvlan vlan hash_next last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
@@ -457,11 +455,30 @@ int find_router(uint8_t * mac, uint16_t rvlan)
 	return -1;
 }
 
+void del_router(int idx)
+{
+	if ((idx < 0) || (idx >= total_router)) {
+		err_msg("error del router %d", idx);
+		return;
+	}
+// if last router, just return
+	if (total_router == 1) {
+		total_router = 0;
+		err_msg("del last router");
+		return;
+	}
+// move last router in array to idx
+	memcpy((void *)&routers[idx], (void *)&routers[total_router - 1], sizeof(struct router_info));
+	total_router--;
+	err_msg("del router %d", idx);
+}
+
 int add_router(uint8_t * mac, uint16_t rvlan)
 {
 	int i;
 	i = find_router(mac, rvlan);
 	if (i >= 0) {
+		routers[i].new = 1;
 		err_msg("%s in router table", mac_to_str(mac));
 		return -1;
 	}
@@ -469,8 +486,10 @@ int add_router(uint8_t * mac, uint16_t rvlan)
 		err_msg("Too many router\n");
 		return -1;
 	}
+	memset((void *)&routers[total_router], 0, sizeof(struct router_info));
 	memcpy((void *)routers[total_router].mac, mac, 6);
 	routers[total_router].rvlan = rvlan;
+	routers[total_router].new = 1;
 	total_router++;
 	return 0;
 }
@@ -487,6 +506,9 @@ void read_router_config(char *fname)
 {
 	FILE *fp;
 	char buf[MAXLEN];
+	int i;
+	for (i = 0; i < total_router; i++)
+		routers[i].new = 0;
 	fp = fopen(fname, "r");
 	if (fp == NULL) {
 		err_msg("open file %s error, exit.", fname);
@@ -525,14 +547,18 @@ void read_router_config(char *fname)
 		add_router(mac, rvlan);
 	}
 	fclose(fp);
+	if (total_router == 0)
+		return;
+	for (i = total_router - 1; i >= 0; i--) {
+		if (routers[i].new == 0)
+			del_router(i);
+	}
 }
 
 void print_router_config()
 {
 	int i;
-	err_msg("======================");
-	err_msg("router config file: %s", router_config);
-	err_msg("router network dev: %s", dev_router);
+	err_msg("===== router config file: %s, network dev: %s", router_config, dev_router);
 	err_msg("forward multicast from router: %d", forward_multicast);
 	err_msg("routers:");
 	err_msg("idx MAC         rvlan send_pkt send_byte bcast_pkt bcast_byte");
