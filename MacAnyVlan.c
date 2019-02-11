@@ -37,6 +37,8 @@
 
 #define MAXCLIENT		4096
 
+#define MAXROUTER		100
+
 #define HASHBKT			(MAXCLIENT*2)
 
 #define VLAN_TAG_LEN   4
@@ -81,10 +83,17 @@ volatile struct router_info {
 	uint64_t send_bytes;
 	uint64_t bcast_pkts;
 	uint64_t bcast_bytes;
-} routers[MAXCLIENT];
+} routers[MAXROUTER];
 
 volatile int total_router = 0;
 volatile int total_client = 0;
+
+volatile struct rvlan_client_info {
+	uint16_t vlano[MAXCLIENT];
+	uint16_t vlani[MAXCLIENT];
+	uint16_t count[MAXCLIENT];
+	uint16_t total_rvlan_client;
+} rvlan_client[4096];
 
 int daemon_proc;		/* set nonzero by daemon_init() */
 int pid;
@@ -258,6 +267,60 @@ void str_to_mac(char *str, uint8_t * mac)
 	}
 }
 
+int find_rvlan_client(uint16_t rvlan, uint16_t vlano, uint16_t vlani)
+{
+	int i;
+	for (i = 0; i < rvlan_client[rvlan].total_rvlan_client; i++)
+		if ((rvlan_client[rvlan].vlano[i] == vlano) && (rvlan_client[rvlan].vlani[i] == vlani))
+			return i;
+	return -1;
+}
+
+void add_rvlan_client(uint16_t rvlan, uint16_t vlano, uint16_t vlani)
+{
+	int i;
+	rvlan = rvlan & 0xfff;
+	vlano = vlano & 0xfff;
+	vlani = vlani & 0xfff;
+	if ((rvlan == 0) || (vlano == 0))
+		return;
+	i = find_rvlan_client(rvlan, vlano, vlani);
+	if (i >= 0) {
+		rvlan_client[rvlan].count[i]++;
+		return;
+	}
+	rvlan_client[rvlan].vlano[rvlan_client[rvlan].total_rvlan_client] = vlano;
+	rvlan_client[rvlan].vlani[rvlan_client[rvlan].total_rvlan_client] = vlani;
+	rvlan_client[rvlan].count[rvlan_client[rvlan].total_rvlan_client] = 1;
+	rvlan_client[rvlan].total_rvlan_client++;
+}
+
+void del_rvlan_client(uint16_t rvlan, uint16_t vlano, uint16_t vlani)
+{
+	int i;
+	rvlan = rvlan & 0xfff;
+	vlano = vlano & 0xfff;
+	vlani = vlani & 0xfff;
+	if ((rvlan == 0) || (vlano == 0))
+		return;
+	i = find_rvlan_client(rvlan, vlano, vlani);
+	if (i >= 0) {
+		rvlan_client[rvlan].count[i]--;
+		if (rvlan_client[rvlan].count[i] == 0) {
+			if (rvlan_client[rvlan].total_rvlan_client == 1) {
+				rvlan_client[rvlan].total_rvlan_client = 0;
+				return;
+			}
+			rvlan_client[rvlan].vlano[i] = rvlan_client[rvlan].vlano[rvlan_client[rvlan].total_rvlan_client - 1];
+			rvlan_client[rvlan].vlani[i] = rvlan_client[rvlan].vlani[rvlan_client[rvlan].total_rvlan_client - 1];
+			rvlan_client[rvlan].count[i] = rvlan_client[rvlan].count[rvlan_client[rvlan].total_rvlan_client - 1];
+			rvlan_client[rvlan].total_rvlan_client--;
+		}
+		return;
+	}
+	err_msg("del_rvlan_client %d %d %d, not added", rvlan, vlano, vlani);
+}
+
 static inline uint16_t hash_key(uint8_t * mac)
 {
 	uint16_t k = 0;
@@ -284,8 +347,10 @@ int add_client(uint8_t * mac, uint16_t rvlan)
 	i = find_client(mac);
 	if (i >= 0) {
 		err_msg("%s in client table", mac_to_str(mac));
+		del_rvlan_client(clients[i].rvlan, clients[i].vlano, clients[i].vlani);
 		clients[i].rvlan = rvlan;
 		clients[i].new = 1;
+		add_rvlan_client(clients[i].rvlan, clients[i].vlano, clients[i].vlani);
 		return -1;
 	}
 	if (total_client == MAXCLIENT - 1) {
@@ -314,6 +379,7 @@ void del_client(int idx)
 		err_msg("error del client %d", idx);
 		return;
 	}
+	del_rvlan_client(clients[idx].rvlan, clients[idx].vlano, clients[idx].vlani);
 // del from hash
 	k = hash_key((uint8_t *) clients[idx].mac);
 	if (client_hash[k] == idx) {	// first hash
@@ -482,7 +548,7 @@ int add_router(uint8_t * mac, uint16_t rvlan)
 		err_msg("%s in router table", mac_to_str(mac));
 		return -1;
 	}
-	if (total_router == MAXCLIENT - 1) {
+	if (total_router == MAXROUTER - 1) {
 		err_msg("Too many router\n");
 		return -1;
 	}
@@ -565,6 +631,15 @@ void print_router_config()
 	for (i = 0; i < total_router; i++)
 		err_msg("%3d %s %4d %ld %ld %ld %ld", i, mac_to_str((uint8_t *) routers[i].mac), routers[i].rvlan,
 			routers[i].send_pkts, routers[i].send_bytes, routers[i].bcast_pkts, routers[i].bcast_bytes);
+	err_msg("rvlan client:");
+	for (i = 0; i < 4096; i++) {
+		int j;
+		if (rvlan_client[i].total_rvlan_client) {
+			err_msg("rvlan %d:", i);
+			for (j = 0; j < rvlan_client[i].total_rvlan_client; j++)
+				err_msg("    %d.%d count=%d", rvlan_client[i].vlano[j], rvlan_client[i].vlani[j], rvlan_client[i].count[j]);
+		}
+	}
 }
 
 /**
@@ -692,6 +767,7 @@ void process_client_to_router(void)
 	u_int8_t buf[MAX_PACKET_SIZE + VLAN_TAG_LEN * 2];
 	int len;
 	int offset = 0;
+	time_t last_check = 0, now_t;
 
 	while (1) {		// read from eth rawsocket
 		struct sockaddr from;
@@ -714,6 +790,17 @@ void process_client_to_router(void)
 		iov.iov_len = MAX_PACKET_SIZE;
 		iov.iov_base = buf + offset;
 		len = recvmsg(fdraw_client, &msg, MSG_TRUNC);
+		now_t = time(NULL);
+		if ((client_timeout > 0) && (now_t - last_check > 5)) {	// check timeout for 5 seconds
+			int i;
+			for (i = 0; i < total_client; i++) {
+				if (now_t - clients[i].last_see > client_timeout) {
+					Debug("client %d idle for %d seconds > client_timeout %d", i, now_t - clients[i].last_see, client_timeout);
+					del_rvlan_client(clients[i].rvlan, clients[i].vlano, clients[i].vlani);
+					clients[i].vlano = clients[i].vlani = 0;
+				}
+			}
+		}
 		if (len <= 0)
 			continue;
 		if (len >= MAX_PACKET_SIZE) {
@@ -806,13 +893,18 @@ void process_client_to_router(void)
 				      ntohs(tag1->vlan_tci) & 0xfff, clients[i].rvlan);
 		}
 
-		clients[i].last_see = time(NULL);
-		if (vlan_tags == 2) {
-			clients[i].vlano = ntohs(tag1->vlan_tci) & 0xfff;
-			clients[i].vlani = ntohs(tag2->vlan_tci) & 0xfff;
-		} else {
-			clients[i].vlano = ntohs(tag1->vlan_tci) & 0xfff;
-			clients[i].vlani = 0;
+		clients[i].last_see = now_t;
+		uint16_t vlano, vlani;
+		vlano = ntohs(tag1->vlan_tci) & 0xfff;
+		if (vlan_tags == 2)
+			vlani = ntohs(tag2->vlan_tci) & 0xfff;
+		else
+			vlani = 0;
+		if ((vlano != clients[i].vlano) || (vlani != clients[i].vlani)) {
+			del_rvlan_client(clients[i].rvlan, clients[i].vlano, clients[i].vlani);
+			clients[i].vlano = vlano;
+			clients[i].vlani = vlani;
+			add_rvlan_client(clients[i].rvlan, vlano, vlani);
 		}
 		clients[i].send_pkts++;
 		clients[i].send_bytes += len;
@@ -950,17 +1042,13 @@ void process_router_to_client(void)
 			Debug("client index %d, vlan: %d.%d", i, clients[i].vlano, clients[i].vlani);
 
 			if (rvlan != clients[i].rvlan) {
-				Debug("routervlan %d is not the same as client rvlan %d, ignore\n", rvlan, clients[i].rvlan);
+				Debug("routervlan %d is not the same as client rvlan %d, ignore", rvlan, clients[i].rvlan);
 				continue;
 			}
 
-			if (client_timeout > 0) {
-				time_t now_t;
-				now_t = time(NULL);
-				if (now_t - clients[i].last_see > client_timeout) {
-					Debug("client idle for %d seconds > client_timeout %d, ignore\n", now_t - clients[i].last_see, client_timeout);
-					continue;
-				}
+			if (clients[i].vlano == 0) {
+				Debug("no client information now, ignore");
+				continue;
 			}
 			// change to client vlan
 			if (clients[i].vlani == 0)
@@ -994,31 +1082,14 @@ void process_router_to_client(void)
 		// broadcast packet, flood to every vlan
 		routers[i].bcast_pkts++;
 		routers[i].bcast_bytes += len;
-		uint8_t vlan_send[4096];
-		memset(vlan_send, 0, 4096);
 		u_int8_t buf2[MAX_PACKET_SIZE + VLAN_TAG_LEN * 2];
 		int buf2_ready = 0;
-		time_t now_t;
-		if (client_timeout > 0)
-			now_t = time(NULL);
-		for (i = 0; i < total_client; i++) {
-			if (vlan_send[clients[i].vlano])
-				continue;
-			if (rvlan != clients[i].rvlan)
-				continue;
-
-			Debug("client index %d, vlan: %d.%d", i, clients[i].vlano, clients[i].vlani);
-			if (client_timeout > 0) {
-				if (now_t - clients[i].last_see > client_timeout) {
-					Debug("client idle for %d seconds > client_timeout %d, ignore\n", now_t - clients[i].last_see, client_timeout);
-					continue;
-				}
-			}
-			vlan_send[clients[i].vlano] = 1;
-
-			if (clients[i].vlani == 0) {	// single VLAN
+		for (i = 0; i < rvlan_client[rvlan].total_rvlan_client; i++) {
+			Debug("rvlan_client index %d, vlan: %d.%d, count=%d", i, rvlan_client[rvlan].vlano[i], rvlan_client[rvlan].vlani[i],
+			      rvlan_client[rvlan].count[i]);
+			if (rvlan_client[rvlan].vlani[i] == 0) {	// single VLAN
 				// change to client vlan
-				tag->vlan_tci = htons(clients[i].vlano & 0xfff);
+				tag->vlan_tci = htons(rvlan_client[rvlan].vlano[i] & 0xfff);
 				if (debug) {
 					printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
 					//if (offset)
@@ -1041,9 +1112,9 @@ void process_router_to_client(void)
 					buf2_ready = 1;
 				}
 				tag = (struct vlan_tag *)(buf2 + 12);
-				tag->vlan_tci = htons(clients[i].vlano & 0xfff);
+				tag->vlan_tci = htons(rvlan_client[rvlan].vlano[i] & 0xfff);
 				tag = (struct vlan_tag *)(buf2 + 16);
-				tag->vlan_tci = htons(clients[i].vlani & 0xfff);
+				tag->vlan_tci = htons(rvlan_client[rvlan].vlani[i] & 0xfff);
 				if (debug) {
 					printPacket((EtherPacket *) (buf + offset), len, "sendto client:");
 					//if (offset)
