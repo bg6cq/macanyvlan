@@ -491,7 +491,7 @@ void print_client_config()
 	err_msg("clients:");
 	err_msg("idx MAC         rvlan vlan hash_next last_see send_pkts send_bytes recv_pkts recv_bytes");
 	for (i = 0; i < total_client; i++)
-		err_msg("%3d %s %4d %d.%d %d %ld %ld %ld %ld %ld", i, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlano,
+		err_msg("%3d %s %4d %4d.%-4d %4d %4ld %ld %ld %ld %ld", i, mac_to_str((uint8_t *) clients[i].mac), clients[i].rvlan, clients[i].vlano,
 			clients[i].vlani, clients[i].hash_next, clients[i].last_see == 0 ? -1 : (long)(time(NULL) - clients[i].last_see), clients[i].send_pkts,
 			clients[i].send_bytes, clients[i].recv_pkts, clients[i].recv_bytes);
 	err_msg("client hashtable:");
@@ -637,7 +637,7 @@ void print_router_config()
 		if (rvlan_client[i].total_rvlan_client) {
 			err_msg("rvlan %d:", i);
 			for (j = 0; j < rvlan_client[i].total_rvlan_client; j++)
-				err_msg("    %d.%d count=%d", rvlan_client[i].vlano[j], rvlan_client[i].vlani[j], rvlan_client[i].count[j]);
+				err_msg("    %4d.%-4d count=%d", rvlan_client[i].vlano[j], rvlan_client[i].vlani[j], rvlan_client[i].count[j]);
 		}
 	}
 }
